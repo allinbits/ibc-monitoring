@@ -124,6 +124,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 		if err != nil {
 			return nil, err
 		}
+		rt.eth.HistoryFrom = cfg.Eth.HistoryFromBlock
 		if cfg.Eth.RPCURL2 != "" {
 			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
 			if err != nil {
@@ -219,7 +220,14 @@ func (rt *runtime) checks() []monitor.Check {
 	for k, d := range mc.StaleAfter {
 		ce.StaleAfter[model.ClientKind(k)] = d
 	}
-	return []monitor.Check{monitor.ClientExpiry{Config: ce}}
+	// The client expiry is chain-local, one instance per chain, so each
+	// runs as soon as its chain is collected; the route relationship is
+	// cross-chain (docs/design.md §7.11).
+	return []monitor.Check{
+		monitor.ClientExpiry{Config: ce, Chain: model.ChainGno},
+		monitor.ClientExpiry{Config: ce, Chain: model.ChainEthereum},
+		monitor.RouteRelationship{},
+	}
 }
 
 func (rt *runtime) sinks() []alert.Sink {

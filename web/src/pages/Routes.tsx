@@ -237,6 +237,21 @@ function EthSide({ e }: { e: EthRoute }) {
         <dt>route key / client</dt>
         <dd>
           {e.route_key} / {e.current_client}
+          {e.relationship_mismatch && (
+            <Pill kind="bad" title={e.relationship_mismatch}>
+              gno.land disagrees
+            </Pill>
+          )}
+          {e.incomplete?.map((what) => (
+            <Pill key={what} kind="warn" title={what}>
+              incomplete
+            </Pill>
+          ))}
+          {e.migrations.length > 0 && (
+            <div className="muted small">
+              {e.migrations.map((m) => `${m.old} → ${m.new} (block ${m.block})`).join("; ")}
+            </div>
+          )}
         </dd>
         <dt>escrow</dt>
         <dd>
@@ -373,7 +388,7 @@ function RouteCard({ r }: { r: RouteView }) {
   return (
     <section className="route">
       <h3>Route {r.key}</h3>
-      <GnoSide r={r.gno} />
+      {r.gno ? <GnoSide r={r.gno} /> : <Empty what="gno.land route naming this Ethereum route" />}
       {r.ethereum ? <EthSide e={r.ethereum} /> : <Empty what="Ethereum snapshot" />}
     </section>
   );

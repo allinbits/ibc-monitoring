@@ -186,12 +186,25 @@ type RouteView struct {
 
 func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 	var out []RouteView
+	// Ethereum routes are keyed by Ethereum's own route key and name the
+	// gno route they were matched to; an unmatched one is listed alone.
+	eth := s.Store.Snapshots(store.KindEthRoutes)
+	matched := map[string]bool{}
 	for _, sn := range s.Store.Snapshots(store.KindGnoRoutes) {
 		rv := RouteView{Key: sn.Key, Gno: s.mark(sn)}
-		if es, ok := s.Store.Snapshot(store.KindEthRoutes, sn.Key); ok {
-			rv.Ethereum = s.mark(es)
+		for _, es := range eth {
+			if er, ok := es.Value.(model.EthRoute); ok && (er.GnoRoute == sn.Key || es.Key == sn.Key) {
+				rv.Ethereum = s.mark(es)
+				matched[es.Key] = true
+				break
+			}
 		}
 		out = append(out, rv)
+	}
+	for _, es := range eth {
+		if !matched[es.Key] {
+			out = append(out, RouteView{Key: es.Key, Ethereum: s.mark(es)})
+		}
 	}
 	if out == nil {
 		out = []RouteView{}

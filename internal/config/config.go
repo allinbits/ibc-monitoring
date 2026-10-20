@@ -76,6 +76,9 @@ type Eth struct {
 	// DeploymentFile is gno-eth-ibc's contracts/deployments/<chain>.json; its
 	// addresses fill any address left empty above.
 	DeploymentFile string `yaml:"deployment_file"`
+	// HistoryFromBlock is the transfer proxy's deployment block, where the
+	// route history (GnoRouteMigrated) is read from.
+	HistoryFromBlock uint64 `yaml:"history_from_block"`
 }
 
 type Monitor struct {

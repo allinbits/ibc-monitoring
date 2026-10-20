@@ -55,15 +55,69 @@ type SendRecord struct {
 	ProvenGen        uint64
 }
 
-// Route reads the Ethereum side of the route whose current client is
-// clientID. retired lists the route's retired client ids (from gno.land's
-// `replaced`), tokens the ERC20s to read limits for (the gno denoms' `remote`).
-func (v *Views) Route(ctx context.Context, clientID string, retired []string, tokens []common.Address, b ethrpc.Block) (model.EthRoute, error) {
+// RouteDiscovery is what Ethereum itself says about a route: its key, its
+// current client at the pin, and its client generations from its own
+// history (docs/design.md §4.2). The gno relationship is compared
+// separately by the collector.
+type RouteDiscovery struct {
+	RouteKey      string
+	CurrentClient string
+	Migrations    []model.EthMigration
+	// Retired are the clients the migrations replaced (the current one
+	// excluded), oldest first.
+	Retired []string
+}
+
+// Discover resolves the route of a client id on Ethereum: `routeKey(id)`,
+// `currentClient(routeKey)` at the pin, and the GnoRouteMigrated history of
+// that route from HistoryFrom to the pin.
+func (v *Views) Discover(ctx context.Context, clientID string, b ethrpc.Block) (RouteDiscovery, error) {
 	x := v.addrs.Transfer
-	r := model.EthRoute{CurrentClient: clientID, Provenance: v.provenance(b), RouteFlags: []model.EthFlag{}, RefundsFlags: []model.EthFlag{}, Limits: []model.EthLimits{}, Incidents: []model.EthIncident{}, Recon: []model.EthClientRecon{}}
+	var d RouteDiscovery
 	var err error
-	if r.RouteKey, err = one[string](ctx, v, x, v.xfer, "routeKey", b, clientID); err != nil {
-		return r, err
+	if d.RouteKey, err = one[string](ctx, v, x, v.xfer, "routeKey", b, clientID); err != nil {
+		return d, err
+	}
+	if d.CurrentClient, err = one[string](ctx, v, x, v.xfer, "currentClient", b, d.RouteKey); err != nil {
+		return d, err
+	}
+	ev, ok := v.xfer.Events["GnoRouteMigrated"]
+	if !ok {
+		return d, fmt.Errorf("transfer ABI has no GnoRouteMigrated event")
+	}
+	logs, err := v.rpc.Logs(ctx, x, [][]common.Hash{{ev.ID}}, v.HistoryFrom, b.Number)
+	if err != nil {
+		return d, err
+	}
+	seen := map[string]bool{}
+	for _, l := range logs {
+		vals, err := ev.Inputs.Unpack(l.Data)
+		if err != nil || len(vals) != 3 {
+			return d, fmt.Errorf("GnoRouteMigrated at block %d: undecodable", l.BlockNumber)
+		}
+		old, _ := vals[0].(string)
+		next, _ := vals[1].(string)
+		key, _ := vals[2].(string)
+		if key != d.RouteKey {
+			continue
+		}
+		d.Migrations = append(d.Migrations, model.EthMigration{Old: old, New: next, Block: l.BlockNumber})
+		if old != d.CurrentClient && !seen[old] {
+			seen[old] = true
+			d.Retired = append(d.Retired, old)
+		}
+	}
+	return d, nil
+}
+
+// Route reads the Ethereum side of a discovered route; tokens are the
+// ERC20s to read limits for (the gno denoms' resolved tokens).
+func (v *Views) Route(ctx context.Context, d RouteDiscovery, tokens []common.Address, b ethrpc.Block) (model.EthRoute, error) {
+	x := v.addrs.Transfer
+	clientID, retired := d.CurrentClient, d.Retired
+	r := model.EthRoute{RouteKey: d.RouteKey, CurrentClient: clientID, Migrations: d.Migrations, Provenance: v.provenance(b), RouteFlags: []model.EthFlag{}, RefundsFlags: []model.EthFlag{}, Limits: []model.EthLimits{}, Incidents: []model.EthIncident{}, Recon: []model.EthClientRecon{}}
+	if r.Migrations == nil {
+		r.Migrations = []model.EthMigration{}
 	}
 	escrow, err := one[common.Address](ctx, v, x, v.xfer, "getEscrow", b, r.RouteKey)
 	if err != nil {

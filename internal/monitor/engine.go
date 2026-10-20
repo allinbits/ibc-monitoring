@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/allinbits/ibc-monitoring/internal/alert"
@@ -25,43 +26,89 @@ type Engine struct {
 	// Now is the clock the checks evaluate against (tests set it).
 	Now func() time.Time
 
+	// mu serializes check evaluation and alarm application: chain-local
+	// checks run on the collecting goroutines.
+	mu    sync.Mutex
 	skips map[string]int
 }
 
-// RunOnce collects and evaluates every check once.
+// ChainLocal is a check that needs one chain's collection only; the engine
+// runs it as soon as that chain's bundle is published, without waiting for
+// the other chain (docs/design.md §7.11). Checks without it are cross-chain
+// and run after both collections.
+type ChainLocal interface {
+	LocalChain() model.Chain
+}
+
+func chainOf(c Check) model.Chain {
+	if cl, ok := c.(ChainLocal); ok {
+		return cl.LocalChain()
+	}
+	return ""
+}
+
+// RunOnce collects and evaluates every check once: the chain-local checks
+// of each chain when its collection completes, the cross-chain ones after
+// both.
 func (e *Engine) RunOnce(ctx context.Context) []model.CheckResult {
-	if e.skips == nil {
-		e.skips = map[string]int{}
-	}
-	if e.Collector != nil {
-		e.Collector.Collect(ctx)
-	}
 	now := time.Now()
 	if e.Now != nil {
 		now = e.Now()
 	}
-	if e.Alerts != nil {
-		e.applyChainAlarms(ctx, now)
-	}
 	var results []model.CheckResult
-	for _, c := range e.Checks {
-		r := c.Run(ctx, e.Store, now)
-		// A skip and an error both mean "not evaluated" for the deferred
-		// alarm (docs/design.md §8.3).
-		if r.Status == model.CheckSkipped || r.Status == model.CheckError {
-			e.skips[c.Name()]++
-		} else {
-			e.skips[c.Name()] = 0
-		}
-		r.ConsecutiveSkips = e.skips[c.Name()]
-		e.Store.PutResult(r)
-		if e.Alerts != nil {
-			e.Alerts.Apply(ctx, r)
-			e.applyDeferred(ctx, r)
-		}
+	var rmu sync.Mutex
+	run := func(c Check) {
+		r := e.runCheck(ctx, c, now)
+		rmu.Lock()
 		results = append(results, r)
+		rmu.Unlock()
+	}
+	if e.Collector != nil {
+		e.Collector.CollectWith(ctx, func(chain model.Chain, _ Pins) {
+			for _, c := range e.Checks {
+				if chainOf(c) == chain {
+					run(c)
+				}
+			}
+		})
+	}
+	if e.Alerts != nil {
+		e.mu.Lock()
+		e.applyChainAlarms(ctx, now)
+		e.mu.Unlock()
+	}
+	for _, c := range e.Checks {
+		if chainOf(c) != "" && e.Collector != nil {
+			continue // ran on its chain's completion
+		}
+		run(c)
 	}
 	return results
+}
+
+// runCheck evaluates one check and applies its alarms, under the engine's
+// lock.
+func (e *Engine) runCheck(ctx context.Context, c Check, now time.Time) model.CheckResult {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.skips == nil {
+		e.skips = map[string]int{}
+	}
+	r := c.Run(ctx, e.Store, now)
+	// A skip and an error both mean "not evaluated" for the deferred
+	// alarm (docs/design.md §8.3).
+	if r.Status == model.CheckSkipped || r.Status == model.CheckError {
+		e.skips[c.Name()]++
+	} else {
+		e.skips[c.Name()] = 0
+	}
+	r.ConsecutiveSkips = e.skips[c.Name()]
+	e.Store.PutResult(r)
+	if e.Alerts != nil {
+		e.Alerts.Apply(ctx, r)
+		e.applyDeferred(ctx, r)
+	}
+	return r
 }
 
 // applyChainAlarms raises collection_unavailable/<chain> after N consecutive

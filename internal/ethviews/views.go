@@ -28,13 +28,16 @@ type Addresses struct {
 
 // Views reads from one node.
 type Views struct {
-	rpc   *ethrpc.Client
-	addrs Addresses
-	admin *gethabi.ABI
-	xfer  *gethabi.ABI
-	lc    *gethabi.ABI
-	erc20 *gethabi.ABI
-	exec  *gethabi.ABI
+	// HistoryFrom is the first block the route history (GnoRouteMigrated)
+	// is read from; the deployment block (eth.history_from_block).
+	HistoryFrom uint64
+	rpc         *ethrpc.Client
+	addrs       Addresses
+	admin       *gethabi.ABI
+	xfer        *gethabi.ABI
+	lc          *gethabi.ABI
+	erc20       *gethabi.ABI
+	exec        *gethabi.ABI
 }
 
 // New returns views over rpc.

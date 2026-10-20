@@ -170,9 +170,26 @@ export interface EthClientRecon {
   retired: boolean;
 }
 
+export interface EthMigration {
+  old: string;
+  new: string;
+  block: number;
+}
+
 export interface EthRoute {
   route_key: string;
+  /** Ethereum's own currentClient(routeKey) at the pin. */
   current_client: string;
+  /** Client generations from Ethereum's own history (GnoRouteMigrated). */
+  migrations: EthMigration[];
+  /** The gno.land route matched to this one and the counterparty it names; the relationship is a separate comparison. */
+  gno_route?: string;
+  gno_counterparty?: string;
+  relationship_mismatch?: string;
+  /** The gno collection the cross-chain inputs came from (0: none). */
+  gno_discovery: number;
+  /** What the snapshot lacks without a gno discovery. */
+  incomplete?: string[];
   escrow: string;
   closed: boolean;
   reopening: boolean;
@@ -196,7 +213,8 @@ export interface EthRoute {
 
 export interface RouteView {
   key: string;
-  gno: GnoRoute;
+  /** Absent for an Ethereum route no gno.land route names. */
+  gno?: GnoRoute;
   ethereum?: EthRoute;
 }
 
@@ -359,6 +377,9 @@ export interface Info {
 export interface ChainState {
   ok: boolean;
   verified: boolean;
+  /** False when a cross-chain dependency was missing: collected, not fresh. */
+  complete: boolean;
+  incomplete?: string;
   error?: string;
   consecutive_failures?: number;
   consecutive_unverified?: number;

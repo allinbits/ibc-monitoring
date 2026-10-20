@@ -21,6 +21,9 @@ const (
 	KindEthRoutes     = "eth_routes"
 	KindEthGovernance = "eth_governance"
 	KindPins          = "pins"
+	// KindGnoDiscovery is the gno collection's discovery record (its
+	// clients and routes as one immutable object; docs/design.md §7.11).
+	KindGnoDiscovery = "gno_discovery"
 )
 
 // Snapshot is one stored view with its provenance.
@@ -35,6 +38,9 @@ type Snapshot struct {
 // Store is what the collector writes and the checks and API read.
 type Store interface {
 	PutSnapshot(s Snapshot)
+	// PutSnapshots stores a bundle atomically: a reader sees all of it or
+	// none of it (docs/design.md §7.11, coherent collections).
+	PutSnapshots(snaps []Snapshot)
 	Snapshot(kind, key string) (Snapshot, bool)
 	Snapshots(kind string) []Snapshot
 
@@ -78,6 +84,20 @@ func (m *Memory) PutSnapshot(s Snapshot) {
 		s.StoredAt = time.Now()
 	}
 	m.snapshots[s.Kind][s.Key] = s
+}
+
+func (m *Memory) PutSnapshots(snaps []Snapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range snaps {
+		if m.snapshots[s.Kind] == nil {
+			m.snapshots[s.Kind] = map[string]Snapshot{}
+		}
+		if s.StoredAt.IsZero() {
+			s.StoredAt = time.Now()
+		}
+		m.snapshots[s.Kind][s.Key] = s
+	}
 }
 
 func (m *Memory) Snapshot(kind, key string) (Snapshot, bool) {

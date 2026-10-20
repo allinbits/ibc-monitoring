@@ -28,6 +28,7 @@ eth:
   light_client: false    # true when rpc_url is a Helios endpoint (docs/design.md §3.5)
   # Either list the addresses, or point at gno-eth-ibc's deployment file.
   deployment_file: ../gno-eth-ibc/contracts/deployments/local.json
+  history_from_block: 0      # the transfer proxy's deployment block (route history is read from it)
   addresses:
     router: ""
     transfer: ""

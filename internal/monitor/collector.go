@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,9 +43,25 @@ type Collector struct {
 	// it unbounded (tests).
 	Timeout time.Duration
 
+	mu         sync.Mutex
 	collection uint64
 	gnoState   ChainState
 	ethState   ChainState
+	// last is the latest pins snapshot; a chain that has not completed the
+	// current round keeps its previous part in it.
+	last Pins
+}
+
+// GnoDiscovery is the gno collection's clients and routes as one immutable
+// object, published atomically with the snapshots they came from, so that
+// the Ethereum collection reads a coherent view of one gno collection
+// (docs/design.md §7.11).
+type GnoDiscovery struct {
+	Collection uint64                  `json:"collection"`
+	Pin        gnoviews.Pin            `json:"pin"`
+	Verified   model.Verification      `json:"verification"`
+	Clients    map[string]model.Client `json:"clients"`
+	Routes     []model.Route           `json:"routes"`
 }
 
 // ChainState is one chain's collection readiness (docs/design.md §7.11).
@@ -54,6 +71,12 @@ type ChainState struct {
 	// Verified is true when the latest collection's header was agreed (or
 	// light-client verified); an unverified collection is not fresh.
 	Verified bool `json:"verified"`
+	// Complete is true when the latest collection had every input it
+	// needs; one whose cross-chain dependency was missing (the Ethereum
+	// collection without a gno discovery) is collected but not fresh, and
+	// Incomplete says what it lacked (docs/design.md §7.11).
+	Complete   bool   `json:"complete"`
+	Incomplete string `json:"incomplete,omitempty"`
 	// Error is the latest collection's error, redacted ("" when OK).
 	Error string `json:"error,omitempty"`
 	// ConsecutiveFailures counts collections that failed in a row;
@@ -91,7 +114,7 @@ type Pins struct {
 // successful, header-agreed collection.
 func (p Pins) Fresh(chain model.Chain, prov model.Provenance) bool {
 	st := p.State(chain)
-	return st.OK && st.Verified && prov.Collection == st.LastCollection
+	return st.OK && st.Verified && st.Complete && prov.Collection == st.LastCollection
 }
 
 // State returns one chain's state.
@@ -102,56 +125,102 @@ func (p Pins) State(chain model.Chain) ChainState {
 	return p.GnoState
 }
 
-// Collect reads every view once. The two chains are collected concurrently,
-// each under its own deadline, so a failure or a stall on one chain neither
-// prevents nor delays the other chain's snapshots; both states are reported
-// in the pins snapshot. A collection that runs past Timeout is a failed
-// collection for that chain.
-func (c *Collector) Collect(ctx context.Context) Pins {
+// Collect reads every view once; see CollectWith.
+func (c *Collector) Collect(ctx context.Context) Pins { return c.CollectWith(ctx, nil) }
+
+// CollectWith reads every view once. The two chains are collected
+// concurrently, each under its own deadline, so a failure or a stall on one
+// chain neither prevents nor delays the other chain's snapshots. Each
+// chain publishes its snapshots as one atomic bundle and then the pins
+// snapshot with its own state updated (the other chain's part is the
+// previous round's until that chain completes), and onChain, when given, is
+// called for it at that moment, so chain-local checks run as soon as their
+// chain is collected (docs/design.md §7.11). A collection that runs past
+// Timeout is a failed collection for that chain.
+func (c *Collector) CollectWith(ctx context.Context, onChain func(model.Chain, Pins)) Pins {
+	c.mu.Lock()
 	c.collection++
-	pins := Pins{Collection: c.collection, CollectedAt: time.Now()}
+	pins := c.last
+	pins.Collection, pins.CollectedAt = c.collection, time.Now()
+	c.last = pins
+	c.mu.Unlock()
+	var gnoDone chan struct{}
+	if c.Gno != nil {
+		gnoDone = make(chan struct{})
+	}
 	var wg sync.WaitGroup
-	run := func(chain string, collect func(context.Context) error, state *ChainState, verifiedOf func() model.Verification) {
+	run := func(chain model.Chain, collect func(context.Context, *Pins) (string, error), done chan struct{}) {
 		defer wg.Done()
+		if done != nil {
+			defer close(done)
+		}
 		cctx, cancel := ctx, context.CancelFunc(func() {})
 		if c.Timeout > 0 {
 			cctx, cancel = context.WithTimeout(ctx, c.Timeout)
 		}
 		defer cancel()
-		err := collect(cctx)
+		var local Pins
+		incomplete, err := collect(cctx, &local)
 		if err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			err = fmt.Errorf("collection timed out after %s: %w", c.Timeout, err)
 		}
-		*state = state.update(err, verified(verifiedOf()), c.collection, pins.CollectedAt)
+		c.mu.Lock()
+		p := &c.last
+		if chain == model.ChainGno {
+			p.Gno, p.GnoVerified, p.GnoCrossCheck = local.Gno, local.GnoVerified, local.GnoCrossCheck
+			c.gnoState = c.gnoState.update(err, verified(local.GnoVerified), incomplete, c.collection, p.CollectedAt)
+			p.GnoState, p.GnoError = c.gnoState, c.gnoState.Error
+		} else {
+			p.Eth, p.EthVerified, p.EthCrossCheck, p.EthFinalityIndependent = local.Eth, local.EthVerified, local.EthCrossCheck, local.EthFinalityIndependent
+			c.ethState = c.ethState.update(err, verified(local.EthVerified), incomplete, c.collection, p.CollectedAt)
+			p.EthState, p.EthError = c.ethState, c.ethState.Error
+		}
+		published := *p
+		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: published})
+		c.mu.Unlock()
 		if err != nil {
-			c.log().Error(chain+" collection failed", "err", state.Error)
+			c.log().Error(string(chain)+" collection failed", "err", redact.String(err.Error()))
+		} else if incomplete != "" {
+			c.log().Warn(string(chain)+" collection incomplete", "missing", incomplete)
+		}
+		if onChain != nil {
+			onChain(chain, published)
 		}
 	}
 	if c.Gno != nil {
 		wg.Add(1)
-		go run("gno", func(cctx context.Context) error { return c.collectGno(cctx, &pins) }, &c.gnoState, func() model.Verification { return pins.GnoVerified })
+		go run(model.ChainGno, func(cctx context.Context, p *Pins) (string, error) { return "", c.collectGno(cctx, p) }, gnoDone)
 	}
 	if c.Eth != nil {
 		wg.Add(1)
-		go run("ethereum", func(cctx context.Context) error { return c.collectEth(cctx, &pins) }, &c.ethState, func() model.Verification { return pins.EthVerified })
+		go run(model.ChainEthereum, func(cctx context.Context, p *Pins) (string, error) { return c.collectEth(cctx, p, gnoDone) }, nil)
 	}
 	wg.Wait()
-	pins.GnoState = c.gnoState
-	pins.GnoError = c.gnoState.Error
-	pins.EthState = c.ethState
-	pins.EthError = c.ethState.Error
-	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: pins})
-	return pins
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
+// discovery returns the latest gno discovery.
+func (c *Collector) discovery() (GnoDiscovery, bool) {
+	s, ok := c.Store.Snapshot(store.KindGnoDiscovery, "latest")
+	if !ok {
+		return GnoDiscovery{}, false
+	}
+	d, ok := s.Value.(GnoDiscovery)
+	return d, ok
 }
 
 func verified(v model.Verification) bool {
 	return v == model.VerificationCrossChecked || v == model.VerificationLightClient
 }
 
-func (s ChainState) update(err error, verified bool, collection uint64, at time.Time) ChainState {
+func (s ChainState) update(err error, verified bool, incomplete string, collection uint64, at time.Time) ChainState {
 	if err != nil {
 		s.OK = false
 		s.Verified = false
+		s.Complete = false
+		s.Incomplete = ""
 		s.Error = redact.String(err.Error())
 		s.ConsecutiveFailures++
 		return s
@@ -160,12 +229,26 @@ func (s ChainState) update(err error, verified bool, collection uint64, at time.
 		// Read, but the header did not agree: the snapshots are not fresh.
 		s.OK = true
 		s.Verified = false
+		s.Complete = incomplete == ""
+		s.Incomplete = incomplete
 		s.Error = ""
 		s.ConsecutiveFailures = 0
 		s.ConsecutiveUnverified++
 		return s
 	}
-	return ChainState{OK: true, Verified: true, LastSuccess: at, LastCollection: collection}
+	if incomplete != "" {
+		// Read and agreed, but a dependency was missing: collected, not
+		// fresh; the last complete collection stays the reference.
+		s.OK = true
+		s.Verified = true
+		s.Complete = false
+		s.Incomplete = incomplete
+		s.Error = ""
+		s.ConsecutiveFailures = 0
+		s.ConsecutiveUnverified = 0
+		return s
+	}
+	return ChainState{OK: true, Verified: true, Complete: true, LastSuccess: at, LastCollection: collection}
 }
 
 func (c *Collector) log() *slog.Logger {
@@ -222,13 +305,19 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 		p.Collection = c.collection
 		p.StateVerification = model.StateNone
 	}
+	// Everything is staged and published as one bundle, with the discovery
+	// record: nothing of a failed collection is published, and a reader
+	// never sees this round's clients beside the previous round's routes.
+	var bundle []store.Snapshot
+	disc := GnoDiscovery{Collection: c.collection, Pin: pin, Clients: map[string]model.Client{}}
 	clients, err := c.Gno.Clients(ctx, pin)
 	if err != nil {
 		return err
 	}
 	for _, cl := range clients {
 		stamp(&cl.Provenance)
-		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoClients, Key: cl.ID, Value: cl, Provenance: cl.Provenance})
+		bundle = append(bundle, store.Snapshot{Kind: store.KindGnoClients, Key: cl.ID, Value: cl, Provenance: cl.Provenance})
+		disc.Clients[cl.ID] = cl
 	}
 	routes, err := c.Gno.Routes(ctx, pin)
 	if err != nil {
@@ -237,22 +326,32 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 	keys := make([]string, 0, len(routes))
 	for _, r := range routes {
 		stamp(&r.Provenance)
-		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoRoutes, Key: r.Key, Value: r, Provenance: r.Provenance})
+		bundle = append(bundle, store.Snapshot{Kind: store.KindGnoRoutes, Key: r.Key, Value: r, Provenance: r.Provenance})
 		keys = append(keys, r.Key)
+		disc.Routes = append(disc.Routes, r)
 	}
 	gov, err := c.Gno.Governance(ctx, keys, pin)
 	if err != nil {
 		return err
 	}
 	stamp(&gov.Provenance)
-	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoGovernance, Key: "ibcgov", Value: gov, Provenance: gov.Provenance})
+	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoGovernance, Key: "ibcgov", Value: gov, Provenance: gov.Provenance})
+	disc.Verified = pins.GnoVerified
+	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoDiscovery, Key: "latest", Value: disc, Provenance: model.Provenance{Chain: model.ChainGno, Height: uint64(pin.Height), Collection: c.collection, Verification: pins.GnoVerified}})
+	c.Store.PutSnapshots(bundle)
 	return nil
 }
 
-func (c *Collector) collectEth(ctx context.Context, pins *Pins) error {
+// collectEth reads the Ethereum views. It discovers the route on Ethereum
+// itself and reads one immutable gno discovery for the inputs it cannot get
+// there (the denoms' tokens, the relationship); on start-up, when none
+// exists, it waits for this round's gno collection (gnoDone) within its own
+// deadline. Without a usable discovery the collection is incomplete: the
+// returned string says what it lacks (docs/design.md §7.11).
+func (c *Collector) collectEth(ctx context.Context, pins *Pins, gnoDone <-chan struct{}) (string, error) {
 	b, err := c.Eth.Pinned(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	pins.Eth = b
 	primary := c.EthVerification
@@ -298,64 +397,119 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins) error {
 	addrs := c.Eth.Addresses()
 	gov, err := c.Eth.Governance(ctx, b)
 	if err != nil {
-		return err
+		return "", err
 	}
 	stamp(&gov.Provenance)
-	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthGovernance, Key: "ibcadmin", Value: gov, Provenance: gov.Provenance})
+	var bundle []store.Snapshot
+	bundle = append(bundle, store.Snapshot{Kind: store.KindEthGovernance, Key: "ibcadmin", Value: gov, Provenance: gov.Provenance})
 
 	// TODO(phase 2): resolve the route's verifier from ICS02ClientAdded /
 	// ICS02ClientMigrated logs instead of the configured address.
 	if addrs.LightClient != (common.Address{}) {
 		lc, err := c.Eth.LightClient(ctx, addrs.LightClient, gov.GovClient, "route", b)
 		if err != nil {
-			return err
+			return "", err
 		}
 		stamp(&lc.Provenance)
-		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthClients, Key: lc.Address, Value: lc, Provenance: lc.Provenance})
+		bundle = append(bundle, store.Snapshot{Kind: store.KindEthClients, Key: lc.Address, Value: lc, Provenance: lc.Provenance})
 	}
 
-	// One Ethereum route per gno route: its current client id is the gno
-	// client's counterparty; its retired ids the replaced clients'. The
-	// tokens are each denom's resolved Ethereum token (remote or trace base).
-	gnoClients := map[string]model.Client{}
-	for _, s := range c.Store.Snapshots(store.KindGnoClients) {
-		if cl, ok := s.Value.(model.Client); ok {
-			gnoClients[cl.ID] = cl
+	// The route is discovered on Ethereum: the governance client's route
+	// key, its current client at the pin and its generations from
+	// Ethereum's own history (review finding 7). gno.land's view of it is
+	// compared separately below.
+	d, err := c.Eth.Discover(ctx, gov.GovClient, b)
+	if err != nil {
+		return "", fmt.Errorf("ethereum route of %s: %w", gov.GovClient, err)
+	}
+	// One immutable gno discovery, taken now; on start-up, when none exists
+	// yet, this round's gno collection is awaited within the deadline.
+	disc, ok := c.discovery()
+	if !ok && gnoDone != nil {
+		select {
+		case <-gnoDone:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		disc, ok = c.discovery()
+	}
+	var incomplete []string
+	var tokens []common.Address
+	var er model.EthRoute
+	switch {
+	case !ok:
+		incomplete = append(incomplete, "no gno discovery yet: the route's tokens and gno relationship are unknown")
+	case !verified(disc.Verified):
+		incomplete = append(incomplete, fmt.Sprintf("gno discovery %d is unverified: the route's tokens and gno relationship are unknown", disc.Collection))
+	default:
+		er.GnoDiscovery = disc.Collection
+		if r, cp, found := matchGnoRoute(disc, d); found {
+			er.GnoRoute, er.GnoCounterparty = r.Key, cp
+			er.RelationshipMismatch = relationship(disc, r, cp, d)
+			seen := map[common.Address]bool{}
+			for _, dn := range r.Denoms {
+				if !common.IsHexAddress(dn.Token) {
+					continue
+				}
+				a := common.HexToAddress(dn.Token)
+				if !seen[a] {
+					seen[a] = true
+					tokens = append(tokens, a)
+				}
+			}
+		} else {
+			er.RelationshipMismatch = fmt.Sprintf("no gno.land route names Ethereum's route %s (current client %s) as its counterparty", d.RouteKey, d.CurrentClient)
+			incomplete = append(incomplete, "no gno route matches Ethereum's route: its tokens are unknown")
 		}
 	}
-	for _, s := range c.Store.Snapshots(store.KindGnoRoutes) {
-		r, ok := s.Value.(model.Route)
-		if !ok {
-			continue
+	pre := er
+	if er, err = c.Eth.Route(ctx, d, tokens, b); err != nil {
+		return "", fmt.Errorf("ethereum route %s: %w", d.RouteKey, err)
+	}
+	er.GnoDiscovery, er.GnoRoute, er.GnoCounterparty, er.RelationshipMismatch, er.Incomplete = pre.GnoDiscovery, pre.GnoRoute, pre.GnoCounterparty, pre.RelationshipMismatch, incomplete
+	stamp(&er.Provenance)
+	bundle = append(bundle, store.Snapshot{Kind: store.KindEthRoutes, Key: er.RouteKey, Value: er, Provenance: er.Provenance})
+	c.Store.PutSnapshots(bundle)
+	return strings.Join(incomplete, "; "), nil
+}
+
+// matchGnoRoute finds the gno route whose client, or one of whose replaced
+// clients, names one of the Ethereum route's clients as its counterparty.
+func matchGnoRoute(disc GnoDiscovery, d ethviews.RouteDiscovery) (model.Route, string, bool) {
+	ethIDs := map[string]bool{d.CurrentClient: true}
+	for _, id := range d.Retired {
+		ethIDs[id] = true
+	}
+	for _, r := range disc.Routes {
+		cp := disc.Clients[r.Client].CounterpartyID
+		if cp != "" && ethIDs[cp] {
+			return r, cp, true
 		}
-		cur, ok := gnoClients[r.Client]
-		if !ok || cur.CounterpartyID == "" {
-			continue
-		}
-		var retired []string
 		for _, old := range r.Replaced {
-			if oc, ok := gnoClients[old]; ok && oc.CounterpartyID != "" {
-				retired = append(retired, oc.CounterpartyID)
+			if oc := disc.Clients[old].CounterpartyID; oc != "" && ethIDs[oc] {
+				return r, cp, true
 			}
 		}
-		var tokens []common.Address
-		seen := map[common.Address]bool{}
-		for _, d := range r.Denoms {
-			if !common.IsHexAddress(d.Token) {
-				continue
-			}
-			a := common.HexToAddress(d.Token)
-			if !seen[a] {
-				seen[a] = true
-				tokens = append(tokens, a)
-			}
-		}
-		er, err := c.Eth.Route(ctx, cur.CounterpartyID, retired, tokens, b)
-		if err != nil {
-			return fmt.Errorf("ethereum route %s: %w", cur.CounterpartyID, err)
-		}
-		stamp(&er.Provenance)
-		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: r.Key, Value: er, Provenance: er.Provenance})
 	}
-	return nil
+	return model.Route{}, "", false
+}
+
+// relationship compares gno.land's view of the route (its client's
+// counterparty, its replaced clients' counterparties) with Ethereum's own
+// (currentClient, the migrations); "" when they agree.
+func relationship(disc GnoDiscovery, r model.Route, cp string, d ethviews.RouteDiscovery) string {
+	var diffs []string
+	if cp != d.CurrentClient {
+		diffs = append(diffs, fmt.Sprintf("gno.land's route client %s names %s as the current client; Ethereum's currentClient(%s) is %s", r.Client, cp, d.RouteKey, d.CurrentClient))
+	}
+	retired := map[string]bool{}
+	for _, id := range d.Retired {
+		retired[id] = true
+	}
+	for _, old := range r.Replaced {
+		if oc := disc.Clients[old].CounterpartyID; oc != "" && !retired[oc] && oc != d.CurrentClient {
+			diffs = append(diffs, fmt.Sprintf("gno.land replaced client %s (counterparty %s) has no migration on Ethereum", old, oc))
+		}
+	}
+	return strings.Join(diffs, "; ")
 }

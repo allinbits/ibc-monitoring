@@ -179,5 +179,26 @@ type EthRoute struct {
 	ResolvedUpTo    uint64           `json:"resolved_up_to"`
 	PendingIncident uint64           `json:"pending_incidents"`
 	Recon           []EthClientRecon `json:"client_recon"`
-	Provenance      Provenance       `json:"provenance"`
+	// Migrations are the route's client generations from Ethereum's own
+	// history (GnoRouteMigrated), oldest first.
+	Migrations []EthMigration `json:"migrations"`
+	// GnoRoute is the gno.land route matched to this one and GnoCounterparty
+	// the client gno.land's route client names as its counterparty; the
+	// relationship is a separate cross-chain comparison (design §4.2) and
+	// RelationshipMismatch says how it fails. GnoDiscovery is the gno
+	// collection those inputs came from (0: none); Incomplete names what the
+	// snapshot lacks without it.
+	GnoRoute             string     `json:"gno_route,omitempty"`
+	GnoCounterparty      string     `json:"gno_counterparty,omitempty"`
+	RelationshipMismatch string     `json:"relationship_mismatch,omitempty"`
+	GnoDiscovery         uint64     `json:"gno_discovery"`
+	Incomplete           []string   `json:"incomplete,omitempty"`
+	Provenance           Provenance `json:"provenance"`
+}
+
+// EthMigration is one GnoRouteMigrated{old, new, routeKey} of a route.
+type EthMigration struct {
+	Old   string `json:"old"`
+	New   string `json:"new"`
+	Block uint64 `json:"block"`
 }

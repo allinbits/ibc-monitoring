@@ -36,7 +36,16 @@ type Server struct {
 	proofs   map[string]any // addr → eth_getProof answer
 	// finalized is the number the "finalized" tag answers (the head unless set).
 	finalized *uint64
+	logs      []types.Log
 	Calls     []string
+}
+
+// AddLog serves a log from eth_getLogs (filtered by address, first topic
+// and block range).
+func (s *Server) AddLog(l types.Log) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logs = append(s.logs, l)
 }
 
 // SetFinalized makes the "finalized" tag answer block n (which must be
@@ -207,7 +216,7 @@ func (s *Server) dispatch(req request) (any, *rpcError) {
 	case "eth_call":
 		return s.call(req.Params)
 	case "eth_getLogs":
-		return []any{}, nil
+		return s.getLogs(req.Params)
 	case "eth_getProof":
 		var addr common.Address
 		_ = json.Unmarshal(req.Params[0], &addr)
@@ -305,4 +314,71 @@ func revertReason(msg string) []byte {
 	str, _ := gethabi.NewType("string", "", nil)
 	packed, _ := gethabi.Arguments{{Type: str}}.Pack(msg)
 	return append([]byte{0x08, 0xc3, 0x79, 0xa0}, packed...)
+}
+
+type filterArg struct {
+	FromBlock string            `json:"fromBlock"`
+	ToBlock   string            `json:"toBlock"`
+	Address   json.RawMessage   `json:"address"`
+	Topics    []json.RawMessage `json:"topics"`
+}
+
+func (s *Server) getLogs(params []json.RawMessage) (any, *rpcError) {
+	var f filterArg
+	if len(params) > 0 {
+		_ = json.Unmarshal(params[0], &f)
+	}
+	parse := func(h string) (uint64, bool) {
+		if h == "" || h == "latest" {
+			return 0, false
+		}
+		n, err := hexutil.DecodeUint64(h)
+		return n, err == nil
+	}
+	from, hasFrom := parse(f.FromBlock)
+	to, hasTo := parse(f.ToBlock)
+	var addrs []common.Address
+	var one common.Address
+	if err := json.Unmarshal(f.Address, &one); err == nil {
+		addrs = []common.Address{one}
+	} else {
+		_ = json.Unmarshal(f.Address, &addrs)
+	}
+	var topic0 []common.Hash
+	if len(f.Topics) > 0 {
+		var single common.Hash
+		if err := json.Unmarshal(f.Topics[0], &single); err == nil {
+			topic0 = []common.Hash{single}
+		} else {
+			_ = json.Unmarshal(f.Topics[0], &topic0)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []types.Log{}
+	for _, l := range s.logs {
+		if hasFrom && l.BlockNumber < from || hasTo && l.BlockNumber > to {
+			continue
+		}
+		if len(addrs) > 0 {
+			ok := false
+			for _, a := range addrs {
+				ok = ok || a == l.Address
+			}
+			if !ok {
+				continue
+			}
+		}
+		if len(topic0) > 0 {
+			ok := false
+			for _, t := range topic0 {
+				ok = ok || (len(l.Topics) > 0 && l.Topics[0] == t)
+			}
+			if !ok {
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	return out, nil
 }

@@ -75,6 +75,7 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 
 	// Transfer app.
 	srv.Returns(xferAddr, "routeKey", "client-0")
+	srv.Returns(xferAddr, "currentClient", "client-0")
 	srv.Returns(xferAddr, "getEscrow", common.HexToAddress("0x5e5e"))
 	srv.Returns(xferAddr, "routeClosed", false)
 	srv.Returns(xferAddr, "routeReopening", false)
@@ -201,11 +202,22 @@ func TestGovernance(t *testing.T) {
 
 func TestRoute(t *testing.T) {
 	v, b, _ := fixture(t)
-	r, err := v.Route(context.Background(), "client-0", []string{"client-old"}, []common.Address{tokenAddr}, b)
+	// The route is discovered on Ethereum: routeKey, then currentClient at
+	// the pin (review finding 7); the fixture's history has no migration,
+	// so the retired client is added here for the recon assertions.
+	d, err := v.Discover(context.Background(), "client-0", b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.RouteKey != "client-0" || r.Escrow != common.HexToAddress("0x5e5e").Hex() || !r.Paused || r.Closed {
+	if d.RouteKey != "client-0" || d.CurrentClient != "client-0" || len(d.Migrations) != 0 {
+		t.Fatalf("discovery: %+v", d)
+	}
+	d.Retired = []string{"client-old"}
+	r, err := v.Route(context.Background(), d, []common.Address{tokenAddr}, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RouteKey != "client-0" || r.CurrentClient != "client-0" || r.Escrow != common.HexToAddress("0x5e5e").Hex() || !r.Paused || r.Closed {
 		t.Fatalf("route: %+v", r)
 	}
 	if len(r.RouteFlags) != 2 || r.RouteFlags[0].Seat != 0 || r.RouteFlags[1].Seat != 4 || r.RouteFlags[1].Key != watch0.Hex() {
@@ -261,7 +273,7 @@ func TestLightClient(t *testing.T) {
 func TestRevertIsReported(t *testing.T) {
 	v, b, srv := fixture(t)
 	srv.On(xferAddr, "routeKey", func([]any) ([]any, error) { return nil, errConsensus })
-	_, err := v.Route(context.Background(), "client-0", nil, nil, b)
+	_, err := v.Discover(context.Background(), "client-0", b)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

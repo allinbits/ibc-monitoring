@@ -13,6 +13,14 @@ function ChainError({ state, error }: { state?: ChainState; error?: string }) {
       </p>
     );
   }
+  if (state?.ok && state.verified && !state.complete) {
+    return (
+      <p className="error">
+        collection incomplete{state.incomplete ? `: ${state.incomplete}` : ""}; the snapshots below
+        are not fresh
+      </p>
+    );
+  }
   return (
     <p className="error">
       collection failed
@@ -34,7 +42,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
     <div className="grid2">
       <div className="card">
         <h3>gno.land</h3>
-        {!pins.gno_state?.ok || !pins.gno_state?.verified ? (
+        {!pins.gno_state?.ok || !pins.gno_state?.verified || !pins.gno_state?.complete ? (
           <ChainError state={pins.gno_state} error={pins.gno_error} />
         ) : (
           <dl>
@@ -58,7 +66,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
       </div>
       <div className="card">
         <h3>Ethereum</h3>
-        {!pins.eth_state?.ok || !pins.eth_state?.verified ? (
+        {!pins.eth_state?.ok || !pins.eth_state?.verified || !pins.eth_state?.complete ? (
           <ChainError state={pins.eth_state} error={pins.eth_error} />
         ) : (
           <dl>

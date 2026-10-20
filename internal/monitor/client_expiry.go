@@ -36,12 +36,33 @@ func DefaultClientExpiryConfig() ClientExpiryConfig {
 }
 
 // ClientExpiry is the liveness check of every light client on both chains
-// (docs/design.md §7.6, client_expiry). Alarm only; never a flag.
+// (docs/design.md §7.6, client_expiry). Alarm only; never a flag. With
+// Chain set it is chain-local: it evaluates that chain's clients only and
+// runs as soon as that chain is collected.
 type ClientExpiry struct {
 	Config ClientExpiryConfig
+	Chain  model.Chain
 }
 
-func (ClientExpiry) Name() string { return "client_expiry" }
+func (c ClientExpiry) Name() string {
+	if c.Chain == "" {
+		return "client_expiry"
+	}
+	return "client_expiry/" + string(c.Chain)
+}
+
+// LocalChain implements ChainLocal: "" runs after both collections.
+func (c ClientExpiry) LocalChain() model.Chain { return c.Chain }
+
+func (c ClientExpiry) kinds() []string {
+	switch c.Chain {
+	case model.ChainGno:
+		return []string{store.KindGnoClients}
+	case model.ChainEthereum:
+		return []string{store.KindEthClients}
+	}
+	return []string{store.KindGnoClients, store.KindEthClients}
+}
 
 func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) model.CheckResult {
 	started := now
@@ -52,7 +73,7 @@ func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) mode
 	var clients []model.Client
 	var prov []model.Provenance
 	var stale, unevaluated []string
-	for _, kind := range []string{store.KindGnoClients, store.KindEthClients} {
+	for _, kind := range c.kinds() {
 		for _, s := range st.Snapshots(kind) {
 			cl, ok := s.Value.(model.Client)
 			if !ok {

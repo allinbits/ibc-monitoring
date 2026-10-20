@@ -57,7 +57,7 @@ func TestClientExpiryRun(t *testing.T) {
 		t.Fatalf("empty store: %+v", r)
 	}
 	// A collection that read both chains: snapshots of collection 1 are fresh.
-	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: Pins{Collection: 1, GnoState: ChainState{OK: true, Verified: true, LastCollection: 1}, EthState: ChainState{OK: true, Verified: true, LastCollection: 1}}})
+	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: Pins{Collection: 1, GnoState: ChainState{OK: true, Verified: true, Complete: true, LastCollection: 1}, EthState: ChainState{OK: true, Verified: true, Complete: true, LastCollection: 1}}})
 	r = ClientExpiry{Config: DefaultClientExpiryConfig()}.Run(context.Background(), st, now)
 	if r.Status != model.CheckSkipped || r.Reason != "no client snapshot yet" {
 		t.Fatalf("no clients: %+v", r)
