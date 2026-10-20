@@ -899,9 +899,14 @@ reconciled **continuously**, not only when a receive triggers it.
   `app_hash`, `nextValidatorsHash` with `next_validators_hash`, and `timestamp` with the header's `time` at
   **nanosecond** precision (the client stores unix nanoseconds; tm2's header time is RFC 3339 with nanoseconds).
   A difference in any field is poisoned-client evidence, conclusive. The same holds for gno.land's Ethereum
-  clients: each retained state's `slot`, `timestamp` (= `genesis_time + slot · seconds_per_slot`), `state_root`
-  and the `current_sync_committee`/`next_sync_committee` summaries are compared with the beacon node's
-  light-client bootstrap and updates for that period, not the root alone.
+  clients: each retained state's `slot`, `timestamp`, `state_root` and the
+  `current_sync_committee`/`next_sync_committee` summaries are compared with the beacon node's light-client
+  bootstrap and updates for that period, not the root alone. The `timestamp` is compared against the
+  **authenticated mapped execution header's** timestamp (the slot → execution block mapping of §7.0); where a
+  time has to be derived from a slot it is `genesis_time + (slot − genesis_slot) · seconds_per_slot`, the
+  realm's own conversion (`lightclient/ethereum/v0/types.gno`, `slotAtTimestamp`, whose inverse §4.1's expiry
+  derivation already uses) — never `genesis_time + slot · seconds_per_slot`, which on a chain with a non-zero
+  `genesis_slot` would read every honest state as off by `genesis_slot` slots and class the client as poisoned.
 - **Ethereum's clients of gno.land** (the route's `GnoLightClient`, every enrolled kind 6 target, an open
   recovery's candidate): every `ClientUpdated{height, blockHash, appHash}` since the last evaluation, and the
   consensus state it installed (`getConsensusState(height)`, proven), is compared with the own gno node's header
@@ -1503,6 +1508,10 @@ Only then is `autoflag.dry_run: false` allowed on a guardian instance, and the o
   JSON-RPC exchanges (`testdata/`): a fake tm2 RPC and a fake Ethereum JSON-RPC server answer from the recordings.
   The ABI encoder of the tests is go-ethereum's, so an Ethereum fixture is the ABI-encoded return data plus the
   block it was read at. `ibcmon record` writes new fixtures from a live deployment.
+- **Slot ↔ time conversions.** Every place a slot is turned into a time or a time into a slot (the expiry
+  derivation of §4.1, the header-record timestamp of §7.6) has a **non-zero `genesis_slot`** case: an honest
+  client's head time and retained-state timestamps must come out exact, never off by `genesis_slot` slots, so
+  no honest client can read as poisoned from the conversion alone.
 - **Check tests.** Each check is tested as a pure function of store snapshots: given these clients, these records,
   this pair → this result and these alarms. The closed-pair selection and the orphan tests have table tests for
   every rule of §7.2 and §7.4, including the "not yet visible" and "unresolved" cases.
