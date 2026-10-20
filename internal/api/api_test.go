@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,5 +131,67 @@ func TestAPI(t *testing.T) {
 	}
 	if code, _ = get("/clients"); code != 200 {
 		t.Fatalf("spa fallback %d", code)
+	}
+}
+
+// Freshness marking of the relationship view never writes into the stored
+// finding: concurrent readers of /routes and /checks, with results being
+// stored meanwhile, race on nothing (tenth round, finding 2; run under
+// -race).
+func TestRoutesAndChecksConcurrently(t *testing.T) {
+	st := store.NewMemory(10)
+	st.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: "client-0", Value: model.EthRoute{RouteKey: "client-0", GnoRoute: "ethereum-1"}, Provenance: model.Provenance{Chain: model.ChainEthereum, Collection: 1}})
+	st.PutSnapshot(store.Snapshot{Kind: store.KindGnoRoutes, Key: "ethereum-1", Value: model.Route{Key: "ethereum-1"}, Provenance: model.Provenance{Chain: model.ChainGno, Collection: 1}})
+	result := func(i int) model.CheckResult {
+		return model.CheckResult{Check: "route_relationship", Status: model.CheckOK, FinishedAt: time.Now(), Findings: []model.Finding{{
+			Subject: "client-0", Severity: model.SeverityInfo, Title: "agree",
+			Provenance: []model.Provenance{{Chain: model.ChainEthereum, Collection: uint64(i)}, {Chain: model.ChainGno, Collection: uint64(i)}},
+		}}}
+	}
+	st.PutResult(result(1))
+	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", StartedAt: time.Now()}}).Handler())
+	defer srv.Close()
+	get := func(path string) {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("%s: %d", path, resp.StatusCode)
+		}
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				get("/api/v1/routes")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				get("/api/v1/checks")
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 2; i < 60; i++ {
+			st.PutResult(result(i))
+		}
+	}()
+	wg.Wait()
+	// The stored finding's provenance was never marked stale in place.
+	r, _ := st.LatestResult("route_relationship")
+	for _, p := range r.Findings[0].Provenance {
+		if p.Stale {
+			t.Fatal("stored evidence was marked stale by a reader")
+		}
 	}
 }

@@ -2,6 +2,8 @@ package gnoviews
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -229,4 +231,66 @@ func TestUnknownQueryIsAnError(t *testing.T) {
 	if _, err := v.Route(context.Background(), "nope", pin); err == nil {
 		t.Fatal("expected an error for a route the fixture does not hold")
 	}
+}
+
+// An Ethereum client on a chain with a non-zero genesis slot: the head time
+// derived from the latest slot is genesis_time + (slot − genesis_slot) ·
+// seconds_per_slot, the realm's own conversion, never off by genesis_slot
+// slots (tenth round, finding 1).
+func TestExpiryWithNonZeroGenesisSlot(t *testing.T) {
+	f, err := gnorpctest.Load("testdata/devnet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const key = "vm/qrender|gno.land/r/aib/ibc/core:clients?page=1&limit=100"
+	var page map[string]any
+	if err := json.Unmarshal([]byte(f.Queries[key]), &page); err != nil {
+		t.Fatal(err)
+	}
+	var cs map[string]any
+	for _, it := range page["items"].([]any) {
+		item := it.(map[string]any)
+		if item["type"] == "ethereum" {
+			cs = item["client_state"].(map[string]any)
+			cs["genesis_slot"] = "1000"
+			delete(item, "last_consensus_state") // the derivation, not the stored timestamp
+		}
+	}
+	if cs == nil {
+		t.Fatal("no ethereum client in the fixture")
+	}
+	raw, _ := json.Marshal(page)
+	srv := gnorpctest.New(f)
+	t.Cleanup(srv.Close)
+	srv.Set(key, string(raw))
+	v := New(gnorpc.New(srv.URL, gnorpc.WithName("fixture")), DefaultPaths)
+	pin, err := v.LatestPin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients, err := v.Clients(context.Background(), pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	atoi := func(k string) int64 {
+		n, err := strconv.ParseInt(cs[k].(string), 10, 64)
+		if err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		return n
+	}
+	for _, c := range clients {
+		if c.Kind != model.ClientKindEthereum {
+			continue
+		}
+		want := time.Unix(atoi("genesis_time")+(int64(c.LatestHeight)-1000)*atoi("seconds_per_slot"), 0).UTC()
+		if !c.HeadTime.Equal(want) {
+			t.Fatalf("head time %s, want %s (slot %d, genesis slot 1000)", c.HeadTime, want, c.LatestHeight)
+		}
+		if !c.Expiry.Equal(want.Add(c.TrustingPeriod)) {
+			t.Fatalf("expiry %s", c.Expiry)
+		}
+		return
+	}
+	t.Fatal("no ethereum client parsed")
 }

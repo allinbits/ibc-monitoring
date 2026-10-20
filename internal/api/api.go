@@ -213,7 +213,10 @@ func (s *Server) relationship(routeKey string) *RelationshipView {
 		if f.Subject != routeKey {
 			continue
 		}
-		v.Mismatch, v.Severity, v.Title, v.Detail, v.Provenance = f.AlarmKey != "", f.Severity, f.Title, f.Detail, f.Provenance
+		v.Mismatch, v.Severity, v.Title, v.Detail = f.AlarmKey != "", f.Severity, f.Title, f.Detail
+		// A copy: the store hands out shallow copies, so marking the
+		// finding's own slice would rewrite stored evidence under readers.
+		v.Provenance = append([]model.Provenance(nil), f.Provenance...)
 		if fr := s.fresh(); fr != nil {
 			for i := range v.Provenance {
 				v.Provenance[i].Stale = !fr.Fresh(v.Provenance[i].Chain, v.Provenance[i])
