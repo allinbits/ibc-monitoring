@@ -372,7 +372,7 @@ asks for exported views.
 | decision | `qeval Decision(id int64) (decisions.Decision, bool)`, `LastDecision() int64` | the same fields (`Params` is dropped) |
 | governor | `qeval Governor() address`, `Yielded() int64`, `GovDAOGoverns() bool` | |
 | seats | `qeval Seat(n int) address` for `n` in 0..5 (0–3 guardians, 4–5 watch), `SeatOf(a) int`, `IsGuardianSeat(n)` | who holds which seat; which actions the connected wallet may sign |
-| flags | `qeval Flags(routeOrClient string) []string`, each line `"<fn> seat <n> at <unix>[ naming k1,k2]"`; `Flagged(route, fn) bool`; `NamedSuspect(route, key) bool` | per route **and per client with no route** (counts toward the hold) |
+| flags | `qeval Flags(routeOrClient string) []string`, each line `"<fn> seat <n> at <unix>[ naming k1,k2]"`; `Flagged(route, fn) bool`; `NamedSuspect(route, key) bool` | per route **and per client with no route** (counts toward the hold): the monitor's flag subjects are every enrolled route key **plus every discovered client id outside the routes** — a client that is a route's current or replaced client is an alias of the route key and is read under the key only, so a flag is never counted twice — and the hold's explanation (`hold.explained`: the distinct guardian seats standing across all subjects ≥ 2) must account for a `Held()` that comes entirely from such clients (ADR §7.11) |
 | hold | `qeval Held() bool`, `HoldSince() int64` | the hold's start; it ends at `belowSince + 24 h`, where `belowSince` (when the guardian flags fell below two) is unexported: the **end** is only in the `HoldEnding{at}` event, never `HoldSince + 24 h` |
 | payouts epoch | `qeval PayoutsEpoch(route) (epoch, at int64)` | for `Reader.Meters` |
 | route identity | `qeval RouteIdentity(route) string`, `IsRoute(route) bool`, `BridgeRealm(a) string` | |
@@ -938,8 +938,15 @@ source's own dispatch ledger, bytes for bytes:
   `DecisionReceived{epoch, seq, kind, hash, status, redispatch}` delivery (its log read from both providers at a
   header-agreed block, and the hash re-read as `decision(e, seq).hash` by proof), **across every epoch** `IBCAdmin`
   ever had, not only the current one: an epoch switch drops unexecuted decisions, not what the old epoch recorded
-  or applied. For each delivery, with `G` covering its proof height (§7.0 governance coverage): the hash must equal
-  `keccak256(DispatchBody(e, seq))` from the own gno node (agreed). The cases:
+  or applied. For each delivery the hash is compared with `keccak256(DispatchBody(e, seq))` from the own gno node
+  (agreed). A dispatch body is **immutable** once dispatched (`ibcgov/ethereum.gno`: the dispatch is set once, at
+  `send`, and never rewritten), so when a body **exists** at the monitor's gno pin the comparison needs **no causal
+  coverage**: a different hash against an existing body is a **positive contradiction**, conclusive at once,
+  whatever proof height the delivery named — an attacker's enormous fabricated proof height can never postpone
+  it, and the proof height itself is then a fabricated one (§7.5). Causal coverage (§7.0, `G` covering the
+  delivery's proof height) is required only for **absence** or genuinely unknown source state: a delivery whose
+  number has no body yet, or whose epoch gno.land has not opened, is `unresolved` until `G` covers its height,
+  and foreign after. The cases:
   - a **prebound cancel**: a cancel delivered beyond `lastSeq + 64` binds its hash and **applies its tombstones at
     once** while `decision(e, seq).state` stays `NONE` (`IBCAdmin._deliver`: `d.hash = hash; … _tombstone(…)`), so
     a scan of recorded and buffered numbers misses it. Every delivery with status `buffered` and `redispatch`
@@ -954,9 +961,10 @@ source's own dispatch ledger, bytes for bytes:
     effect;
   - two hashes are reconciled **separately** at every delivery: the **stored** one (`decision(e, seq).hash`, by
     proof) and the **incoming** one (`DecisionReceived.hash`, and `Conflict.received`, from the logs at a
-    header-agreed block). Once `G` covers the delivery's proof height, an incoming hash that is not
-    `keccak256(DispatchBody(e, seq))` is a **foreign decision** whether the contract stored it (a recorded,
-    buffered or executed decision) **or rejected it as a conflict**: `_deliver` leaves `d.hash` unchanged and
+    header-agreed block). An incoming hash that differs from an **existing** `DispatchBody(e, seq)` is a
+    **foreign decision at once**; one for a number that has no body yet is foreign once `G` covers the
+    delivery's proof height — in both cases whether the contract stored it (a recorded, buffered or executed
+    decision) **or rejected it as a conflict**: `_deliver` leaves `d.hash` unchanged and
     emits `Conflict(ep, seq, stored, received)`, so the stored hash stays legitimate while `received` identifies
     the forgery, and re-reading `decision().hash` can never authenticate it — the verifier still proved an
     envelope gno.land never dispatched (ADR §5.4: "forged governance packets … can occupy sequence numbers with
@@ -1056,11 +1064,46 @@ of §7.10 is therefore not one intent but one per **flag function**, each eligib
 
 | Milestone | Authenticated by | Intents that close (and are not re-created for this incident) |
 |---|---|---|
-| **MG** **governance channel cleared for repair** (before any execution) | `IBCAdmin`'s own flag defers **every** kind but an unpause while it stands (`IBCAdmin.execute`: `kind != KIND_UNPAUSE && (holdStands \|\| flagged) → Deferred`), the repair decisions included, so it must be released **before** the repair executes, on evidence that nothing dangerous is pending: (i) every decision pending on `IBCAdmin` at the pin — recorded or buffered, in no terminal state — matches bytes for bytes a gno.land dispatch of its epoch (own node, agreed; §7.7), and every foreign delivery of the incident is terminal: tombstoned by an accepted gno cancel, spent, or of an epoch that is past; (ii) each pending **repair** decision — a kind 10 replacement, a kind 6 or 7 correction, a kind 9 hand-over — names a candidate the worker verified (§9: code hash, layout diff, manifest, `gnoBusy()`; for a client candidate, a consensus history that authenticates, §7.6); (iii) the transfer containment of the route stands on both chains (the ingress and `refunds` flags), so releasing the channel exposes no funds. A pending decision that fails (i) or (ii) is a `dangerous_pending_decision` finding (`break`): the intent stays and the dashboard names the decision to cancel | `IBCAdmin`'s own flag: the sink's intent closes so that its owner (or kind 2, which the flag does not defer) clears it and the repair executes; every transfer flag stays. A **new** foreign delivery or notice, or a pending decision that stops matching after MG, is a new finding with a new incident generation, and the flag is eligible again |
+| **MG** **governance channel cleared for repair** (before any execution) | `IBCAdmin`'s own flag defers the 7-day kinds while it stands (the exact rules per kind are in the deferral table below: an unpause is never deferred, a seat change never by flags, a hand-over and a seat change only boundedly, a role revocation not at all), the repair decisions included, so it must be released **before** the repair executes — and only once **every executable decision**, not only the repairs, is accounted for: (i) **authorization**: every decision pending on `IBCAdmin` at the pin — recorded or buffered, in no terminal state — matches bytes for bytes a gno.land dispatch of its epoch (own node, agreed; §7.7), and every foreign delivery of the incident is terminal: tombstoned by an accepted gno cancel, spent, or of an epoch that is past; (ii) **safety of each pending decision**: source-dispatch equality proves authorization, not safety, so each pending decision must be either an **explicitly approved repair operation** of this incident's runbook — a kind 9 hand-over to an executor the worker verified, a kind 10 replacement or kind 6 client with an authenticated candidate (§7.6, §9), a kind 7 whose implementation **passed** the worker's review (code hash, layout diff, manifest, `gnoBusy()`; a kind 7 with a failed or absent layout review blocks MG however genuine its dispatch), a kind 3 or 8 replacing a key or role the incident compromised, a kind 12 that meets M2, a kind 1 cancel — or cancelled/spent; any other pending decision (an ordinary pre-incident upgrade, a limits or settings change, an unpause of the route or of `IBCAdmin` itself, which would release the containment) blocks MG as a `dangerous_pending_decision` finding (`break`) naming the decision to cancel; (iii) **execution path**: every kind but 9 executes **through the pinned executor** (`IBCAdmin._run` → `selfDelegate` → `IBCAdminExec.run`, `_exec` checking only that its code hash is the recorded one), while a kind 9 runs `IBCAdminNative.handover`, never the executor; so when the executor is compromised (a foreign kind 9 executed, or the live `exec()` and its code hash, by proof, are not the manifest's verified build) the **native kind 9 hand-over must be the only executable repair pending** at MG, and the delegated repairs are dispatched only after it executed and the new executor is authenticated (a second MG for them); (iv) the transfer containment of the route stands on both chains (the ingress and `refunds` flags), so releasing the channel exposes no funds — transfer flags constrain the transfer app, not delegated administrative code, which is why (iii) comes first. MG is evaluated against the exact set of pending decisions it authenticated: a decision recorded after it is a new finding | `IBCAdmin`'s own flag: the sink's intent closes so that its owner (or kind 2, which the flag does not defer) clears it and the authenticated repairs execute; every transfer flag stays. A **new** foreign delivery or notice, or a pending decision that stops matching or that was recorded after MG, is a new finding with a new incident generation, and the flag is eligible again |
 | **M1** **replacement verified** | the retired client marked on both chains and the replacement installed by an executed kind 10 / `NewReplaceRouteRequest` whose candidate the worker verified (§9) and whose consensus history authenticates (§7.6) | none yet: every transfer flag stays |
-| **M2** **settlement evidence verified**, **per chain** | validated against **independently authenticated destination outcomes**, never against §7.1's accounting classification of the source record (a forged success acknowledgement leaves the source record "settled" while the destination's authenticated evidence establishes an owed refund — the evidence wins and an action 1 for it is valid): for each item of the chain's settlement decision, the record's outcome at the destination established by the monitor itself (a delivery: the receipt and acknowledgement under `(P.DestinationClient, s)` at a pin covering the record's proof, §7.4; a refundable one: absence by the §7.4 tests; a collision: a different packet at the sequence), the record **proven through the replacement verifier** under its **current generation** (Ethereum: `sendRecord.proven ≠ none`, `provenBy` the route's current verifier, `provenGen` its trust generation, by proof; gno.land: `Proven`, `ProvenBy`, `ProvenGen` with the realm's own `trusted(client, gen)` rule of `PlanSettlement`), the incident **prepared** (Ethereum: `prepareIncident` complete and the replacement checkpointed, `incidents`/`clientRecon` by proof; gno.land: `Prepared()`), and the action and amount matching the proven outcome (pay ↔ refundable or collision, with `amount − refunded`; reject, delivered, loss ↔ delivered; forged receive ↔ the receive's booked loss). **Ethereum**: the recorded kind 12 for the route's retired client; **gno.land**: the pending `NewSettleRequest` for the same client — two independently governed batches, each judged on its own | the **`refunds`** flag **of that chain**: the sink clears no flag, but the intent closes so that governance's clear (kind 2 / `ClearFlag`) stands and the refund-paying settlement executes there; the other chain's `refunds` intent waits for that chain's own M2 |
+| **M2** **settlement evidence verified**, **per chain** | validated **per action**, against independently authenticated evidence, never against §7.1's accounting classification of the source record (a forged success acknowledgement leaves the source record "settled" while the destination's authenticated evidence establishes an owed refund — the evidence wins and an action 1 for it is valid). **Actions 1–4, on a send record of the retired client**: the record's outcome at the **destination**, established by the monitor itself from the destination's receipt and acknowledgement under `(P.DestinationClient, s)` (gno.land `PacketReceipt`/`PacketAcknowledgement` agreed; Ethereum the router's receipt and `WriteAcknowledgement` by proof and header agreement) at a pin at or past the record's timeout or its receive — *delivered*: receipt with a success acknowledgement; *refundable*: no receipt at a destination pin whose timestamp is past `timeoutTimestamp`, or a receipt with an error acknowledgement; *collision*: a receipt whose commitment is not `CommitPacketReceipt(P)` — **never §7.4's tests**, which are source-side send-record tests for orphan receives; the record **proven through the replacement verifier** under its **current generation** (Ethereum: `sendRecord.proven ≠ none`, `provenBy` the route's active client, `provenGen` its `verifierGen`, by proof; gno.land: `Proven`, `ProvenBy`, `ProvenGen` with the realm's own `trusted(client, gen)` rule of `PlanSettlement`), the incident **prepared** (Ethereum: `prepareIncident` complete and the replacement checkpointed, `incidents`/`clientRecon` by proof; gno.land: `Prepared()`), and the action matching the outcome (1 pay ↔ refundable or collision, with `amount − refunded`; 2 reject, 3 delivered, 4 loss ↔ delivered). **Action 5, a forged inbound receive at a sequence of the retired client**: no send record exists or is needed; the evidence is the monitor's own **confirmed-orphan finding** for that receive (§7.4: the destination's receipt authenticated, the source's absence or mismatch proven), the amount is **what the receive actually paid out** (Ethereum: the recorded payout `receives[client][seq]`, by proof, which `_bookForgedReceive` requires equal to the item; gno.land: the claim's `paid` plus the sweep entry's `paidOut()`, the realm's `forgedReceive(key)`), and the claim or sweep entry is `Voidable(key, forged)` — its **loss is booked by the execution itself** (`_bookLoss` at `settleRecords`; `refunds.gno` at apply), so M2 never requires it booked beforehand, and a mixed batch of refunds and action-5 items validates item by item. **Ethereum**: the recorded kind 12 for the route's retired client; **gno.land**: the pending `NewSettleRequest` for the same client — two independently governed batches, each judged on its own | the **`refunds`** flag **of that chain**: the sink clears no flag, but the intent closes so that governance's clear (kind 2 / `ClearFlag`) stands and the refund-paying settlement executes there; the other chain's `refunds` intent waits for that chain's own M2 |
 | **M3** **ingress release** | **both** of: (a) the economic reconciliation finished — a later evaluation at a closed pair finds no residual and no shortfall, after the losses were booked, remedied or accepted and the route reopened (`closed` false, `loss_closed` false on both chains); **and** (b) for **every** finding of the incident, its exploit path repaired and its persistent effects reconciled by the resolution table above: a poisoned client or fabricated root → the client retired on both chains and the epoch switched past it; a forged entitlement → terminal with its loss booked; a foreign decision → the foreign-decision row in full, **in particular an implementation a foreign kind 7 installed replaced** by one an authenticated decision installed and the worker verified (the proxy's implementation slot by proof). A balanced identity alone never retires the ingress containment: a malicious implementation can report balanced state until it is triggered, and a poisoned verifier can prove a new receive tomorrow | the **ingress** containment: gno `credits` and `payouts`, Ethereum's pause flags (receives and escrowed sends) |
 | **M4** **governance path repaired** | the foreign-decision row of the resolution table above, in full | nothing left to release (MG released the channel); the finding resolves |
+
+**Deferral rules per kind, as `IBCAdmin.execute` applies them** (not "every kind but an unpause"): a pending
+decision's danger is judged by whether anything actually holds it, and for how long.
+
+| Kind | Delay | Deferred by a flag | Deferred by a hold (two guardian seats) | Barrier against a dangerous one |
+|---|---|---|---|---|
+| 2 unpause | 24 h | **never** | route object: spent while the route's pause or `refunds` hold stands; `IBCAdmin` object: spent while a hold stands, otherwise it **clears every flag set before its recording** (`Guardians.unpause`), the watch flag included, and clears conflicts earlier than its recording | a **hold** (two guardian flags), or a cancel; a lone watch flag is **no** barrier against a forged `IBCAdmin` unpause recorded after it |
+| 3 seats | 7 d | **never** (`due(…, flags = false)`) | bounded: lands at most at the hold's anchor + 21 d (`ReplacementAnchored`) | cancel, or an epoch switch (the emergency recovery); the hold only delays |
+| 8 role, revocation (zero account) | **none**: due at once | no | no | cancel before delivery, or none — shown as such |
+| 8 role, grant | 7 d | yes | yes | flag or hold, then cancel |
+| 9 hand-over | 7 d | bounded: the flag anchor + 21 d | bounded: anchor + 21 d | cancel or epoch switch; the native path, so a foreign one is the executor compromise of M3/MG (iii) |
+| 12 settle paying a refund | 7 d | yes | yes, and the route's `refunds` hold | flag, hold, cancel |
+| 1 cancel | — | applied at **delivery** (tombstones), never executed | — | only the epoch switch |
+| 4, 5, 6, 7, 10, 11, 13 | 7 d | yes | yes | flag, hold, cancel |
+
+A pending decision that can bypass the standing containment — a seat change, a role revocation, an `IBCAdmin`
+unpause under a lone flag, a hand-over past its bounded deferral — is a `dangerous_pending_decision` (`break`)
+with its **landing time** (`matureAt`, or the anchored `landsAt` of `ReplacementAnchored`) as the deadline to
+act; the required barrier (a second guardian flag making a hold, a cancel, the recovery) is named. A standing
+flag is never taken as sufficient evidence by itself.
+
+**Guarded repair sequence.** Deliveries are gated by nothing a flag controls (`onRecvPacket` checks the client,
+the epoch and `gnoBusy()` only), and a cancel beyond the window **tombstones at delivery** (`_deliver`, prebound),
+so while the compromised verifier still accepts deliveries, a new forged cancel recorded between MG and the
+repair's execution tombstones the authenticated repair, and no later flag undoes a tombstone. The sequence is
+therefore: (1) containment; (2) **seal** the compromised ingress before MG — Ethereum-side verifier compromised:
+the guardians' **emergency recovery** (`approveRecovery` → `executeRecovery`, authenticated by `RecoveryExecuted`
+and `EpochOpened`, the new verifier authenticated per §7.6), after which the old epoch's envelopes are refused
+(`StaleEpoch`) and a delivery needs a proof the recovered verifier accepts; gno-side verifier compromised: the
+Ethereum client retired for the governance port and the epoch client replaced on gno.land (local governance,
+not through the compromised path); (3) MG for the new epoch's repair decisions, the hand-over first where the
+executor is compromised; (4) M1, M2, M3 as above. Nothing on either chain validates and executes a decision
+atomically against the then-current state, so where no seal exists — the recovery disabled (`_recoveryDelay`
+zero) or not eligible (`epoch 1` with no decision recorded), or a compromise the recovery does not reach — the
+race stands: the monitor shows it (`repair_unsealed`, `warning`) and the owner decides on §15 **S1**.
 
 The milestones are the sink's **only** exceptions to re-assertion, each read from the chains at a header-agreed,
 finalized pin, never declared by an operator; the console shows, per open intent, the milestone it waits for
@@ -1082,11 +1125,16 @@ the collection, its pin and its verification, written atomically at the end; not
 published). The Ethereum collection discovers its own subjects on Ethereum (§4.2) and reads the gno discovery
 only for the cross-chain inputs it cannot get there (the denoms' tokens, the relationship): one **immutable**
 discovery, taken at its start, named by collection id in every Ethereum route's provenance; on start-up, when
-none exists yet, it waits for this round's gno discovery within its own deadline. An Ethereum collection whose
-dependency is missing or incomplete is **incomplete** — collected, but not fresh — and says what it lacks; a
-missing dependency never counts as a complete collection. **Chain-local** checks (a client's expiry, a chain's
-governance watch) run as soon as that chain's bundle is published; only **cross-chain** checks (the identity,
-the orphans, the relationship) wait for both, so a stalled provider on one chain delays nothing on the other.
+none exists yet, it waits for the first gno discovery within its own deadline. Readiness is tracked **per
+subject and input bundle**: an Ethereum collection whose gno dependency is missing or incomplete publishes its
+client and governance snapshots as fresh — they need nothing from gno.land, and their checks (a client's
+expiry, the governance watch) run — while its **route** snapshots carry what they lack (`incomplete`) and the
+checks that depend on them (the relationship, the identity) defer; the chain state says the collection is
+incomplete and why, and a missing dependency never counts as a complete route input. **Each chain is collected
+and evaluated on its own schedule**: one loop per chain polls at `poll_interval`, collects, publishes the bundle
+and runs the chain's **chain-local** checks, so a chain whose provider stalls for its whole `collection_timeout`
+costs the other chain nothing — it keeps its cadence; the **cross-chain** checks (the identity, the orphans,
+the relationship) run whenever either chain publishes, over the latest bundle of each.
 The two chains collect **concurrently**, so
 a stalled provider on one chain never delays the other chain's checks.
 
@@ -1136,10 +1184,20 @@ not only on the alarm: it is set only on `raised` and `updated` events of a `bre
 
 **Delivery is asynchronous and bounded.** Each sink has its own queue (default 256 events) and worker; the
 evaluation loop enqueues and never waits on a sink, so a slow webhook cannot delay the next evaluation or another
-sink. A full queue drops the oldest event for that sink, counts the drop and raises `sink_backlog` (the alarm
-state itself is in the store, nothing is lost but the notification). The `autoflag` sink is **not** behind the
-notification queues: it has its own queue, is fed first, and its backlog is an alarm of its own. Webhook retries
-are in-memory in phase 1 and persisted in the store from phase 2, so a restart does not lose them.
+sink. A full queue drops the oldest event for that sink and counts the drop; a delivery the sink refuses is
+counted as a failure. Neither loses the notification for good: each sink keeps a **pending set** of the alarm
+keys whose latest transition it has not delivered (dropped, or failed), and the manager **reconciles** it on
+every evaluation round and on a timer, re-enqueuing the alarm's **current** state (one event per key, the
+latest transition, never the whole burst) until the sink accepts it — independently of any new transition,
+since an unchanged finding produces none. While a sink's pending set is non-empty the manager raises
+`sink_backlog/<sink>` (`warning`; `critical` past `sink_backlog_critical`, default 10 min), with the drop and
+failure counts, and clears it when the set drains; a sink that refuses every delivery for `sink_failing_after`
+(default 5 min) raises `sink_failing/<sink>` (`critical`). Both are findings of a synthetic `sinks` check, so
+the ordinary alarm rules and the other sinks carry them. The queues stay non-blocking: reconciliation enqueues
+with the same never-wait rule, and a sink that cannot keep up only ever sees the latest state per key. The
+`autoflag` sink is **not** behind the notification queues: it has its own queue, is fed first, and its backlog
+is an alarm of its own. Webhook retries are in-memory in phase 1 and persisted in the store from phase 2, so a
+restart does not lose them.
 
 ### 8.3 Deferred alarms
 
@@ -1182,9 +1240,9 @@ pages anyone; a chain that stays unreadable does, through this path, since §7.1
   events), the flag does not already stand for that seat, the deployment matches — while the **evidence** the
   intent rests on is the alarm's finalized, header-agreed, state-authenticated finding, which stays valid
   however old it is (finality does not expire); an intent whose alarm was cleared by an evaluation of its subject
-  closes without signing, as does one whose **flag function reached its milestone** (§7.10a: the `refunds`
-  intents at M2, the ingress intents at M3, `IBCAdmin`'s at M4) — a flag governance cleared to execute the
-  documented repair is never re-set by the sink. An intent whose flags all stand closes `contained`; one that stays partial (one chain
+  closes without signing, as does one whose **flag function reached its milestone** (§7.10a: `IBCAdmin`'s at
+  MG, the `refunds` intents at M2 of their chain, the ingress intents at M3) — a flag governance cleared to
+  execute the documented repair is never re-set by the sink. An intent whose flags all stand closes `contained`; one that stays partial (one chain
   flagged, the other not) is an alarm of its own (`containment_partial`, `critical`) until every flag stands.
 - **Transaction attempts are separate from the intent.** Each signing is an **attempt** `(intent, chain, seat
   index, seat generation, signer, attempt number)` with its **signed bytes** and a state (`signed` →
@@ -1392,9 +1450,12 @@ Only then is `autoflag.dry_run: false` allowed on a guardian instance, and the o
 - **Repair sequence (a release gate of the auto-flag sink, §12).** An engine-level scenario over recorded
   fixtures drives the complete runbook with the sink in dry run and asserts the set of open intents and the
   bytes it would sign after every step: a foreign delivery → the containment intents of every function on
-  both chains; gno.land's cancel tombstones it, the kind 10 and kind 7 repairs are recorded and the worker
-  verifies their candidates → **MG**: the `IBCAdmin` intent closes, the owner clears the flag, nothing is
-  re-signed; the kind 10 executes → **M1**; the records are proven through the replacement, the incident
+  both chains; the emergency recovery **seals** the channel (a forged cancel injected before the seal must
+  tombstone nothing the sequence relies on, one injected after it must be refused as `StaleEpoch`); the kind 9
+  hand-over is recorded alone, verified, released by **MG** and executed before any delegated repair; the kind
+  10 and kind 7 repairs are recorded and the worker verifies their candidates (a kind 7 with a failed layout
+  review must block MG), a stray pending limits change must block MG until cancelled → **MG**: the `IBCAdmin`
+  intent closes, the owner clears the flag, nothing is re-signed; the kind 10 executes → **M1**; the records are proven through the replacement, the incident
   prepared, the kind 12 recorded on Ethereum and the `NewSettleRequest` on gno.land → **M2 per chain**: each
   `refunds` intent closes only when its own chain's batch validates, governance clears, the settlements execute,
   nothing is re-signed; losses booked, route reopened, identity balanced → **M3 only after** the kind 7
@@ -1470,6 +1531,21 @@ end on the hold views, and the seat generations (`seatGen`, `Keys.gen`).
 serve — the current verifier's own states, the `overrides` and each retired verifier's `history` interval —
 with the generation that holds it. Without it the monitor can replay only what it observed itself, and a
 replacement that predates its discovery leaves the header record incomplete (§7.6).
+
+### Safety prerequisites
+
+Listed apart from the visibility prerequisites: each closes a race the monitor can only show. The owner decides.
+
+**S1. A guarded repair on `IBCAdmin` (gno-eth-ibc).** Deliveries are gated by nothing a flag controls and a
+prebound cancel tombstones at delivery, so between MG and the repair's execution a forged cancel through a
+still-compromised verifier can tombstone the authenticated repair (§7.10a, guarded repair sequence). The
+emergency recovery seals that path where it is enabled and eligible; where it is not, one of: (a) a **delivery
+freeze** — `onRecvPacket` reverts while a watch or guardian flag stands on `IBCAdmin`, so nothing is recorded,
+tombstoned or buffered until the guardians release it (no error ack, so the relayer resends later); or (b)
+**guarded execution** — `execute(seq, expectedHash, expectedTombstones)` that reverts unless the decision's
+hash and the epoch's tombstone set are the ones the caller validated, so a validate-and-execute pair is atomic
+for the executor that runs it. Until one lands, the design states the race and the monitor alarms
+`repair_unsealed` while it is open.
 
 ### Conveniences
 
