@@ -71,7 +71,11 @@ type Pins struct {
 	Eth           ethrpc.Block       `json:"eth"`
 	EthVerified   model.Verification `json:"eth_verification"`
 	EthCrossCheck string             `json:"eth_cross_check,omitempty"`
-	EthState      ChainState         `json:"eth_state"`
+	// EthFinalityIndependent is true when the second provider's own
+	// finalized head confirmed the selected block (design §3.3); integrity
+	// containment requires it.
+	EthFinalityIndependent bool       `json:"eth_finality_independent"`
+	EthState               ChainState `json:"eth_state"`
 	// GnoError and EthError repeat the states' errors for the dashboard.
 	GnoError string `json:"gno_error,omitempty"`
 	EthError string `json:"eth_error,omitempty"`
@@ -238,16 +242,32 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins) error {
 	agree := false
 	mismatch := ""
 	if c.Eth2 != nil {
+		// Finality is established independently (docs/design.md §3.3): the
+		// second provider's own finalized head must be at or past the block
+		// the primary chose, and its header at that number must agree. In
+		// the depth and latest modes no finality exists; the pin says so.
 		var other ethrpc.Block
 		other, otherErr = c.Eth2.BlockByNumber(ctx, b.Number)
 		if otherErr == nil {
 			agree = other.Hash == b.Hash
 			if !agree {
-				mismatch = fmt.Sprintf("hash mismatch at %d: %s vs %s", b.Number, b.Hash, other.Hash)
+				mismatch = fmt.Sprintf("header mismatch at %d: %s vs %s", b.Number, b.Hash, other.Hash)
+			}
+		}
+		if otherErr == nil && agree && b.Finality == "finalized" {
+			var head ethrpc.Block
+			head, otherErr = c.Eth2.Pinned(ctx)
+			if otherErr == nil && head.Number < b.Number {
+				agree = false
+				mismatch = fmt.Sprintf("block %d is not finalized by the second provider (its finalized head is %d)", b.Number, head.Number)
 			}
 		}
 	}
 	pins.EthVerified, pins.EthCrossCheck = c.verification(primary, c.Eth2 != nil, otherErr, agree, mismatch)
+	if agree && c.Eth2 != nil && otherErr == nil && b.Finality == "finalized" {
+		pins.EthCrossCheck = "agreed; finalized by the second provider"
+		pins.EthFinalityIndependent = true
+	}
 
 	stamp := func(p *model.Provenance) {
 		p.Verification = pins.EthVerified

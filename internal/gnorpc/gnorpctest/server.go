@@ -28,6 +28,22 @@ type Fixture struct {
 	Queries        map[string]string `json:"queries"`
 	// Errors maps a query key to an ABCI error message.
 	Errors map[string]string `json:"errors,omitempty"`
+	// Blocks holds, per height, the transactions (hex) and the events of
+	// each transaction, for block and block_results.
+	Blocks map[string]BlockFixture `json:"blocks,omitempty"`
+}
+
+// BlockFixture is one block's transactions and results.
+type BlockFixture struct {
+	Txs    []string         `json:"txs"` // hex amino bytes, in order
+	Events [][]EventFixture `json:"events"`
+}
+
+// EventFixture is one emitted event.
+type EventFixture struct {
+	Type    string            `json:"type"`
+	PkgPath string            `json:"pkg_path"`
+	Attrs   map[string]string `json:"attrs"`
 }
 
 // Load reads a fixture file.
@@ -87,11 +103,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "status":
 		result = s.status()
 	case "block":
-		result = s.block()
+		result = s.block(req.Params)
 	case "abci_query":
 		result = s.abciQuery(req.Params)
 	case "block_results":
-		result = map[string]any{"results": map[string]any{"deliver_tx": []any{}}}
+		result = s.blockResults(req.Params)
 	default:
 		s.reply(w, req.ID, nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method})
 		return
@@ -133,9 +149,44 @@ func (s *Server) status() any {
 	}
 }
 
-func (s *Server) block() any {
+func (s *Server) heightParam(params map[string]interface{}) string {
+	h, _ := params["height"].(string)
+	if h == "" || h == "0" {
+		h = strconv.FormatInt(s.fixture.Height, 10)
+	}
+	return h
+}
+
+func (s *Server) blockResults(params map[string]interface{}) any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bf := s.fixture.Blocks[s.heightParam(params)]
+	txs := make([]any, 0, len(bf.Events))
+	for _, evs := range bf.Events {
+		events := make([]any, 0, len(evs))
+		for _, e := range evs {
+			attrs := make([]any, 0, len(e.Attrs))
+			for k, v := range e.Attrs {
+				attrs = append(attrs, map[string]any{"key": k, "value": v})
+			}
+			events = append(events, map[string]any{"type": e.Type, "pkg_path": e.PkgPath, "attrs": attrs})
+		}
+		txs = append(txs, map[string]any{"ResponseBase": map[string]any{"Error": nil, "Events": events}})
+	}
+	return map[string]any{"results": map[string]any{"deliver_tx": txs}}
+}
+
+func (s *Server) block(params map[string]interface{}) any {
 	f := s.fixture
+	s.mu.Lock()
+	bf := f.Blocks[s.heightParam(params)]
+	s.mu.Unlock()
+	txs := make([]string, 0, len(bf.Txs))
+	for _, t := range bf.Txs {
+		txs = append(txs, base64.StdEncoding.EncodeToString(mustHex(t)))
+	}
 	return map[string]any{
+		"block": map[string]any{"data": map[string]any{"txs": txs}},
 		"block_meta": map[string]any{
 			"block_id": map[string]any{"hash": base64.StdEncoding.EncodeToString(mustHex(f.Hash))},
 			"header": map[string]any{

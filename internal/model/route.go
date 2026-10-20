@@ -76,24 +76,34 @@ type Denom struct {
 	// is exact only below 2^53 (LockExact); it is never an identity term.
 	Lock      *Amount `json:"lock,omitempty"`
 	LockExact bool    `json:"lock_exact"`
+	// Saturated names the totals that read as the int64 maximum: the realm
+	// keeps those counters wide and their int64 views saturate, so such a
+	// value is a lower bound, never an exact amount (design §4.1).
+	Saturated []string `json:"saturated"`
 }
+
+// Int64Max is the saturating counters' ceiling.
+const Int64Max = "9223372036854775807"
 
 // Route is a gno.land Ethereum route as the transfer realm reports it.
 type Route struct {
-	Key                 string     `json:"route"`
-	Client              string     `json:"client"`
-	Replaced            []string   `json:"replaced"`
-	Enrolled            time.Time  `json:"enrolled"`
-	Activated           uint64     `json:"activated"`
-	Closed              bool       `json:"closed"`
-	LossClosed          bool       `json:"loss_closed"`
-	FeeCollector        string     `json:"fee_collector"`
-	RefusedRecipients   []string   `json:"refused_recipients"`
-	ProtectedRecipients []string   `json:"protected_recipients"`
-	Unrecovered         Amount     `json:"unrecovered"`
-	Unresolved          Amount     `json:"unresolved"`
-	Denoms              []Denom    `json:"denoms"`
-	Provenance          Provenance `json:"provenance"`
+	Key                 string    `json:"route"`
+	Client              string    `json:"client"`
+	Replaced            []string  `json:"replaced"`
+	Enrolled            time.Time `json:"enrolled"`
+	Activated           uint64    `json:"activated"`
+	Closed              bool      `json:"closed"`
+	LossClosed          bool      `json:"loss_closed"`
+	FeeCollector        string    `json:"fee_collector"`
+	RefusedRecipients   []string  `json:"refused_recipients"`
+	ProtectedRecipients []string  `json:"protected_recipients"`
+	Unrecovered         Amount    `json:"unrecovered"`
+	Unresolved          Amount    `json:"unresolved"`
+	// Saturated names the route totals (unrecovered, unresolved) that read
+	// as the int64 maximum: lower bounds, not exact amounts.
+	Saturated  []string   `json:"saturated"`
+	Denoms     []Denom    `json:"denoms"`
+	Provenance Provenance `json:"provenance"`
 }
 
 // EthFlag is a standing flag on Ethereum (zero values: not standing).

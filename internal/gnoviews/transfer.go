@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"time"
 
@@ -140,6 +141,13 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 	}
 	if r.Unresolved, err = amount(rj.Unresolved); err != nil {
 		return r, err
+	}
+	r.Saturated = []string{}
+	if rj.Unrecovered.String() == model.Int64Max {
+		r.Saturated = append(r.Saturated, "unrecovered")
+	}
+	if rj.Unresolved.String() == model.Int64Max {
+		r.Saturated = append(r.Saturated, "unresolved")
 	}
 	routeClients := append([]string{rj.Client}, rj.Replaced...)
 	for _, dj := range rj.Denoms {
@@ -276,11 +284,20 @@ func parseDenom(dj denomJSON) (model.Denom, error) {
 		"recapitalized": &d.Totals.Recapitalized, "reduced": &d.Totals.Reduced, "accepted": &d.Totals.Accepted,
 		"unrecovered": &d.Totals.Unrecovered, "unresolved": &d.Totals.Unresolved,
 	}
+	d.Saturated = []string{}
 	for k, dst := range totals {
 		if *dst, err = amount(dj.Totals[k]); err != nil {
 			return d, fmt.Errorf("totals.%s: %w", k, err)
 		}
 	}
+	// The wide counters' int64 views saturate at the maximum: such a value
+	// is a lower bound and is flagged, never used as an exact amount.
+	for _, k := range []string{"in_flight", "returning", "queued_refunds", "parked", "proven_owed", "unrecovered", "unresolved", "lost", "recapitalized", "reduced", "accepted"} {
+		if dj.Totals[k].String() == model.Int64Max {
+			d.Saturated = append(d.Saturated, k)
+		}
+	}
+	sort.Strings(d.Saturated)
 	return d, nil
 }
 

@@ -306,6 +306,31 @@ type Event struct {
 	Type    string
 	PkgPath string
 	Attrs   map[string]string
+	// TxIndex is the transaction's index in its block.
+	TxIndex int
+}
+
+// BlockTxs returns the raw (amino-encoded) transactions of a block, in order.
+func (c *Client) BlockTxs(ctx context.Context, height int64) ([][]byte, error) {
+	var raw struct {
+		Block struct {
+			Data struct {
+				Txs []string `json:"txs"`
+			} `json:"data"`
+		} `json:"block"`
+	}
+	if err := c.call(ctx, "block", map[string]any{"height": strconv.FormatInt(height, 10)}, &raw); err != nil {
+		return nil, err
+	}
+	out := make([][]byte, 0, len(raw.Block.Data.Txs))
+	for i, t := range raw.Block.Data.Txs {
+		b, err := base64.StdEncoding.DecodeString(t)
+		if err != nil {
+			return nil, fmt.Errorf("block %d tx %d: %w", height, i, err)
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // BlockResults returns the events of every successful transaction of a block.
@@ -332,7 +357,7 @@ func (c *Client) BlockResults(ctx context.Context, height int64) ([]Event, error
 		return nil, err
 	}
 	var out []Event
-	for _, tx := range raw.Results.DeliverTxs {
+	for i, tx := range raw.Results.DeliverTxs {
 		if len(tx.ResponseBase.Error) > 0 && string(tx.ResponseBase.Error) != "null" {
 			continue
 		}
@@ -341,7 +366,7 @@ func (c *Client) BlockResults(ctx context.Context, height int64) ([]Event, error
 			for _, a := range ev.Attrs {
 				attrs[a.Key] = a.Value
 			}
-			out = append(out, Event{Type: ev.Type, PkgPath: ev.PkgPath, Attrs: attrs})
+			out = append(out, Event{Type: ev.Type, PkgPath: ev.PkgPath, Attrs: attrs, TxIndex: i})
 		}
 	}
 	return out, nil

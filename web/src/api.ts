@@ -103,6 +103,8 @@ export interface Denom {
   /** The realm's escrow accounting (float64 on chain): exact only when lock_exact. */
   lock?: string;
   lock_exact: boolean;
+  /** Totals that read as the int64 maximum: lower bounds, never exact amounts. */
+  saturated: string[];
 }
 
 export interface GnoRoute {
@@ -118,6 +120,7 @@ export interface GnoRoute {
   protected_recipients: string[];
   unrecovered: string;
   unresolved: string;
+  saturated: string[];
   denoms: Denom[];
   provenance: Provenance;
 }

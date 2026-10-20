@@ -33,7 +33,26 @@ type Server struct {
 	handlers map[string]map[string]Handler // addr → selector hex → handler
 	abis     map[string]*gethabi.ABI       // addr → abi
 	code     map[string][]byte
-	Calls    []string
+	proofs   map[string]any // addr → eth_getProof answer
+	// finalized is the number the "finalized" tag answers (the head unless set).
+	finalized *uint64
+	Calls     []string
+}
+
+// SetFinalized makes the "finalized" tag answer block n (which must be
+// served), so a provider whose finality lags the head can be simulated.
+func (s *Server) SetFinalized(n uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finalized = &n
+}
+
+// ProofFor registers the eth_getProof answer for an address (any JSON
+// value shaped like go-ethereum's AccountResult).
+func (s *Server) ProofFor(addr common.Address, answer any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.proofs[strings.ToLower(addr.Hex())] = answer
 }
 
 // Block is a served block. Its hash is computed from the header built from
@@ -70,7 +89,7 @@ func (b Block) HashOf() common.Hash { return b.Header().Hash() }
 // New starts a server with one chain id and a head block.
 func New(chainID uint64, head Block) *Server {
 	head.Hash = head.HashOf()
-	s := &Server{chainID: chainID, head: head.Number, blocks: map[uint64]Block{head.Number: head}, handlers: map[string]map[string]Handler{}, abis: map[string]*gethabi.ABI{}, code: map[string][]byte{}}
+	s := &Server{chainID: chainID, head: head.Number, blocks: map[uint64]Block{head.Number: head}, handlers: map[string]map[string]Handler{}, abis: map[string]*gethabi.ABI{}, code: map[string][]byte{}, proofs: map[string]any{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
 }
@@ -189,6 +208,15 @@ func (s *Server) dispatch(req request) (any, *rpcError) {
 		return s.call(req.Params)
 	case "eth_getLogs":
 		return []any{}, nil
+	case "eth_getProof":
+		var addr common.Address
+		_ = json.Unmarshal(req.Params[0], &addr)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if p, ok := s.proofs[strings.ToLower(addr.Hex())]; ok {
+			return p, nil
+		}
+		return nil, &rpcError{Code: -32000, Message: "ethrpctest: no proof registered for " + addr.Hex()}
 	}
 	return nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method}
 }
@@ -198,7 +226,12 @@ func (s *Server) block(tag string) any {
 	defer s.mu.Unlock()
 	var n uint64
 	switch tag {
-	case "latest", "finalized", "safe", "pending":
+	case "finalized", "safe":
+		n = s.head
+		if s.finalized != nil {
+			n = *s.finalized
+		}
+	case "latest", "pending":
 		n = s.head
 	default:
 		v, err := hexutil.DecodeUint64(tag)

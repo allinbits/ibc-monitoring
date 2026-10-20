@@ -128,6 +128,16 @@ func TestRoutes(t *testing.T) {
 	if mint.Lock.String() != "0" || !mint.LockExact {
 		t.Fatalf("mint lock %s", mint.Lock)
 	}
+	// Saturated counters are flagged as lower bounds, never read as exact.
+	if len(ugnot.Saturated) != 0 || len(mint.Saturated) != 2 || mint.Saturated[0] != "in_flight" || mint.Saturated[1] != "lost" {
+		t.Fatalf("saturated: %v %v", ugnot.Saturated, mint.Saturated)
+	}
+	if mint.Totals.InFlight.String() != model.Int64Max {
+		t.Fatalf("saturated value %s", mint.Totals.InFlight)
+	}
+	if len(r.Saturated) != 0 {
+		t.Fatalf("route saturated %v", r.Saturated)
+	}
 	if len(srv.Unknown) != 0 {
 		t.Fatalf("queries missing from the fixture: %v", srv.Unknown)
 	}

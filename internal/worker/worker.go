@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/allinbits/ibc-monitoring/internal/ethrpc"
 	"github.com/allinbits/ibc-monitoring/internal/model"
@@ -119,17 +120,52 @@ type CodeHashTarget struct {
 	ManifestHash common.Hash
 }
 
-// CodeHash compares the live code hash of a candidate with the pinned hash
-// (and the manifest's) at the pinned block, and checks it is code rather
-// than an EIP-7702 delegation designator (docs/design.md §9.1).
-func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block uint64, prov model.Provenance) Job {
+// CodeHash authenticates a candidate's code and compares it with the pinned
+// hash (and the manifest's) at the pinned block (docs/design.md §9.1). The
+// code is authenticated first: an account proof verified against the
+// block's header-agreed state root gives the account's code hash, and the
+// fetched bytecode must hash to it; without that the verdict is
+// "unverified", never pass or fail. The block must be header-agreed by the
+// caller (the collector's pin); a block without that is refused.
+func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block ethrpc.Block, prov model.Provenance) Job {
 	j := w.add(Job{Kind: JobCodeHash, Subject: t.Subject, Status: "running", StartedAt: time.Now(), Checks: []JobCheck{}, Provenance: &prov})
-	hash, size, err := w.Eth.CodeHash(ctx, t.Address, block)
+	if prov.Verification != model.VerificationCrossChecked && prov.Verification != model.VerificationLightClient {
+		j.Status, j.Verdict, j.FinishedAt = "unverified", "the block is not header-agreed; the code cannot be authenticated", time.Now()
+		w.update(j)
+		return j
+	}
+	proof, err := w.Eth.Proof(ctx, t.Address, nil, block.Number)
+	if err != nil {
+		j.Status, j.Verdict, j.FinishedAt = "unverified", "no account proof: "+redact.String(err.Error()), time.Now()
+		w.update(j)
+		return j
+	}
+	if _, err := proof.Verify(block.StateRoot); err != nil {
+		j.Status, j.Verdict, j.FinishedAt = "unverified", "account proof does not verify against the agreed state root: "+redact.String(err.Error()), time.Now()
+		w.update(j)
+		return j
+	}
+	hash, size, err := w.Eth.CodeHash(ctx, t.Address, block.Number)
 	if err != nil {
 		j.Status, j.Verdict, j.FinishedAt = "error", redact.String(err.Error()), time.Now()
 		w.update(j)
 		return j
 	}
+	// An absent account proves as the empty code hash; a present one carries
+	// its code hash. The fetched bytes must hash to the proven value.
+	proven := proof.CodeHash
+	if size == 0 && (proven == (common.Hash{}) || proven == crypto.Keccak256Hash(nil)) {
+		proven = crypto.Keccak256Hash(nil)
+	}
+	auth := JobCheck{Name: "fetched code hashes to the proven code hash", Expected: proven.Hex(), Actual: hash.Hex(), Passed: hash == proven}
+	j.Checks = append(j.Checks, auth)
+	if !auth.Passed {
+		j.Status, j.Verdict, j.FinishedAt = "unverified", "the node's bytecode does not match the account's proven code hash", time.Now()
+		w.update(j)
+		return j
+	}
+	prov.StateVerification = model.StateProof
+	j.Provenance = &prov
 	passed := true
 	code := JobCheck{Name: "address holds code", Actual: fmt.Sprintf("%d bytes", size), Passed: size > 0}
 	if size == 0 {
@@ -139,7 +175,7 @@ func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block uint64, p
 	j.Checks = append(j.Checks, code)
 	designator := JobCheck{Name: "not an EIP-7702 delegation designator", Passed: true}
 	if size == 23 {
-		if c, err := w.Eth.Code(ctx, t.Address, block); err == nil && len(c) == 23 && c[0] == 0xef && c[1] == 0x01 && c[2] == 0x00 {
+		if c, err := w.Eth.Code(ctx, t.Address, block.Number); err == nil && len(c) == 23 && c[0] == 0xef && c[1] == 0x01 && c[2] == 0x00 {
 			designator.Passed = false
 			designator.Note = "the address is a delegation designator; governance refuses it"
 		}

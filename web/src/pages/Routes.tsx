@@ -4,9 +4,33 @@ import { decimalsOf, formatAmount, percent } from "../amount";
 import { Empty, Id, Loading, Pill, Provenance } from "../components";
 import { iso, unix } from "../time";
 
-function Amt({ v, denom, decimals }: { v: string | undefined; denom?: string; decimals?: number }) {
+/** The saturating counters' ceiling (int64 max): such a value is a lower bound. */
+const INT64_MAX = "9223372036854775807";
+
+function Amt({
+  v,
+  denom,
+  decimals,
+  saturated,
+}: {
+  v: string | undefined;
+  denom?: string;
+  decimals?: number;
+  /** True when the realm reports this field as saturated (design §4.1). */
+  saturated?: boolean;
+}) {
   if (v === undefined) return <span className="muted">—</span>;
   const d = decimals ?? (denom ? decimalsOf(denom) : 0);
+  if (saturated || v === INT64_MAX) {
+    return (
+      <span
+        className="amt"
+        title="saturated: the realm's int64 view of a wider counter; a lower bound, not an exact amount, and unusable as an exact input"
+      >
+        ≥ {formatAmount(v, d)} <Pill kind="warn">saturated</Pill>
+      </span>
+    );
+  }
   return (
     <span className="amt" title={`${v} base units`}>
       {formatAmount(v, d)}
@@ -75,8 +99,13 @@ function DenomRow({ d }: { d: Denom }) {
       <td>
         <GnoMeter m={d.refund_meter} denom={d.denom} cap={d.refund_cap} />
         <div className="muted small">
-          {d.queued_refunds} queued · <Amt v={t.queued_refunds} denom={d.denom} /> · parked{" "}
-          <Amt v={t.parked} denom={d.denom} />
+          {d.queued_refunds} queued ·{" "}
+          <Amt
+            v={t.queued_refunds}
+            denom={d.denom}
+            saturated={d.saturated?.includes("queued_refunds")}
+          />{" "}
+          · parked <Amt v={t.parked} denom={d.denom} saturated={d.saturated?.includes("parked")} />
         </div>
       </td>
       <td>
@@ -104,7 +133,8 @@ function DenomRow({ d }: { d: Denom }) {
       </td>
       <td>
         <div>
-          in flight <Amt v={t.in_flight} denom={d.denom} />
+          in flight{" "}
+          <Amt v={t.in_flight} denom={d.denom} saturated={d.saturated?.includes("in_flight")} />
         </div>
         <div className="muted small">
           sent <Amt v={t.sent} denom={d.denom} /> · refunded <Amt v={t.refunded} denom={d.denom} />
@@ -112,12 +142,21 @@ function DenomRow({ d }: { d: Denom }) {
       </td>
       <td>
         <div>
-          lost <Amt v={t.lost} denom={d.denom} /> · unrecovered{" "}
-          <Amt v={t.unrecovered} denom={d.denom} />
+          lost <Amt v={t.lost} denom={d.denom} saturated={d.saturated?.includes("lost")} /> ·
+          unrecovered{" "}
+          <Amt v={t.unrecovered} denom={d.denom} saturated={d.saturated?.includes("unrecovered")} />
         </div>
         <div className="muted small">
-          recap <Amt v={t.recapitalized} denom={d.denom} /> · reduced{" "}
-          <Amt v={t.reduced} denom={d.denom} /> · accepted <Amt v={t.accepted} denom={d.denom} />
+          recap{" "}
+          <Amt
+            v={t.recapitalized}
+            denom={d.denom}
+            saturated={d.saturated?.includes("recapitalized")}
+          />{" "}
+          · reduced{" "}
+          <Amt v={t.reduced} denom={d.denom} saturated={d.saturated?.includes("reduced")} /> ·
+          accepted{" "}
+          <Amt v={t.accepted} denom={d.denom} saturated={d.saturated?.includes("accepted")} />
         </div>
       </td>
       <td>
@@ -161,7 +200,8 @@ function GnoSide({ r }: { r: GnoRoute }) {
         </dd>
         <dt>unrecovered / unresolved</dt>
         <dd>
-          <Amt v={r.unrecovered} /> / <Amt v={r.unresolved} />
+          <Amt v={r.unrecovered} saturated={r.saturated?.includes("unrecovered")} /> /{" "}
+          <Amt v={r.unresolved} saturated={r.saturated?.includes("unresolved")} />
         </dd>
       </dl>
       <table>
