@@ -46,6 +46,12 @@ type Collector struct {
 	// first gno discovery before publishing its own subjects without it
 	// (default 5 s, never its whole deadline).
 	DiscoveryWait time.Duration
+	// Freshness bounds the selected head (docs/design.md §7.11): a genuine
+	// but old head is stale, and its collection not fresh. Zero bounds are
+	// unenforced (tests); the configuration sets them.
+	Freshness Freshness
+	// Now is the clock the bounds are judged against (tests set it).
+	Now func() time.Time
 
 	mu         sync.Mutex
 	collection uint64
@@ -59,6 +65,53 @@ type Collector struct {
 	initOnce       sync.Once
 	discoveryReady chan struct{}
 	discoveryOnce  sync.Once
+	// progress is, per chain, the last pinned height and when it last
+	// advanced (the progress bound).
+	progress map[model.Chain]*progressMark
+}
+
+type progressMark struct {
+	height  uint64
+	advance time.Time
+}
+
+// Freshness bounds the selected pin per chain (docs/design.md §7.11).
+type Freshness struct {
+	// MaxHeadAge is how old the pin's block time may be.
+	MaxGnoHeadAge, MaxEthHeadAge time.Duration
+	// MaxProviderLag is how many blocks the second provider's own head may
+	// be past the selected pin before the primary counts as withholding.
+	MaxGnoProviderLag, MaxEthProviderLag uint64
+	// HeadStallAfter is how long the pin may stay at one height while the
+	// chain collects without error.
+	HeadStallAfter time.Duration
+}
+
+// Heads are both providers' independently reported heads for one chain and
+// the selected pin's age at collection.
+type Heads struct {
+	Primary uint64 `json:"primary"`
+	Second  uint64 `json:"second,omitempty"`
+	// AgeSeconds is the collection time minus the pin's block time.
+	AgeSeconds int64 `json:"age_seconds"`
+}
+
+func (c *Collector) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
+// staleHead judges the selected pin against the bounds: "" when fresh.
+func staleHead(h Heads, maxAge time.Duration, maxLag uint64) string {
+	if maxAge > 0 && h.AgeSeconds > int64(maxAge/time.Second) {
+		return fmt.Sprintf("the pinned block is %s old, past the %s bound", (time.Duration(h.AgeSeconds) * time.Second).String(), maxAge)
+	}
+	if maxLag > 0 && h.Second > h.Primary && h.Second-h.Primary > maxLag {
+		return fmt.Sprintf("the second provider's own head %d is %d blocks past the pinned %d, past the %d bound: the primary is withholding", h.Second, h.Second-h.Primary, h.Primary, maxLag)
+	}
+	return ""
 }
 
 func (c *Collector) init() {
@@ -102,6 +155,13 @@ type ChainState struct {
 	// Incomplete says what it lacked (docs/design.md §7.11).
 	Complete   bool   `json:"complete"`
 	Incomplete string `json:"incomplete,omitempty"`
+	// Stale is true when the latest collection's pin failed a freshness
+	// bound (head age, provider lag, progress; docs/design.md §7.11):
+	// collected and agreed, but an old head, so not fresh. StaleReason says
+	// which bound; ConsecutiveStale counts such collections in a row.
+	Stale            bool   `json:"stale"`
+	StaleReason      string `json:"stale_reason,omitempty"`
+	ConsecutiveStale int    `json:"consecutive_stale"`
 	// Error is the latest collection's error, redacted ("" when OK).
 	Error string `json:"error,omitempty"`
 	// ConsecutiveFailures counts collections that failed in a row;
@@ -121,10 +181,12 @@ type Pins struct {
 	Gno           gnoviews.Pin       `json:"gno"`
 	GnoVerified   model.Verification `json:"gno_verification"`
 	GnoCrossCheck string             `json:"gno_cross_check,omitempty"`
+	GnoHeads      Heads              `json:"gno_heads"`
 	GnoState      ChainState         `json:"gno_state"`
 	Eth           ethrpc.Block       `json:"eth"`
 	EthVerified   model.Verification `json:"eth_verification"`
 	EthCrossCheck string             `json:"eth_cross_check,omitempty"`
+	EthHeads      Heads              `json:"eth_heads"`
 	// EthFinalityIndependent is true when the second provider's own
 	// finalized head confirmed the selected block (design §3.3); integrity
 	// containment requires it.
@@ -143,7 +205,7 @@ type Pins struct {
 // carry what they lack themselves (model.EthRoute.Incomplete).
 func (p Pins) Fresh(chain model.Chain, prov model.Provenance) bool {
 	st := p.State(chain)
-	return st.OK && st.Verified && prov.Collection == st.LastCollection
+	return st.OK && st.Verified && !st.Stale && prov.Collection == st.LastCollection
 }
 
 // State returns one chain's state.
@@ -199,13 +261,16 @@ func (c *Collector) CollectChain(ctx context.Context, chain model.Chain) Pins {
 	}
 	defer cancel()
 	var local Pins
-	var incomplete string
+	var incomplete, stale string
 	var err error
+	var height uint64
 	switch chain {
 	case model.ChainGno:
-		err = c.collectGno(cctx, &local, id)
+		stale, err = c.collectGno(cctx, &local, id)
+		height = uint64(local.Gno.Height)
 	case model.ChainEthereum:
-		incomplete, err = c.collectEth(cctx, &local, id)
+		incomplete, stale, err = c.collectEth(cctx, &local, id)
+		height = local.Eth.Number
 	default:
 		err = fmt.Errorf("unknown chain %q", chain)
 	}
@@ -213,15 +278,18 @@ func (c *Collector) CollectChain(ctx context.Context, chain model.Chain) Pins {
 		err = fmt.Errorf("collection timed out after %s: %w", c.Timeout, err)
 	}
 	c.mu.Lock()
+	if err == nil && stale == "" {
+		stale = c.checkProgress(chain, height)
+	}
 	p := &c.last
 	at := p.CollectedAt
 	if chain == model.ChainGno {
-		p.Gno, p.GnoVerified, p.GnoCrossCheck = local.Gno, local.GnoVerified, local.GnoCrossCheck
-		c.gnoState = c.gnoState.update(err, verified(local.GnoVerified), incomplete, id, at)
+		p.Gno, p.GnoVerified, p.GnoCrossCheck, p.GnoHeads = local.Gno, local.GnoVerified, local.GnoCrossCheck, local.GnoHeads
+		c.gnoState = c.gnoState.update(err, verified(local.GnoVerified), incomplete, stale, id, at)
 		p.GnoState, p.GnoError = c.gnoState, c.gnoState.Error
 	} else {
-		p.Eth, p.EthVerified, p.EthCrossCheck, p.EthFinalityIndependent = local.Eth, local.EthVerified, local.EthCrossCheck, local.EthFinalityIndependent
-		c.ethState = c.ethState.update(err, verified(local.EthVerified), incomplete, id, at)
+		p.Eth, p.EthVerified, p.EthCrossCheck, p.EthFinalityIndependent, p.EthHeads = local.Eth, local.EthVerified, local.EthCrossCheck, local.EthFinalityIndependent, local.EthHeads
+		c.ethState = c.ethState.update(err, verified(local.EthVerified), incomplete, stale, id, at)
 		p.EthState, p.EthError = c.ethState, c.ethState.Error
 	}
 	published := *p
@@ -233,10 +301,30 @@ func (c *Collector) CollectChain(ctx context.Context, chain model.Chain) Pins {
 	}
 	if err != nil {
 		c.log().Error(string(chain)+" collection failed", "err", redact.String(err.Error()))
+	} else if stale != "" {
+		c.log().Warn(string(chain)+" pin is stale", "reason", stale)
 	} else if incomplete != "" {
 		c.log().Warn(string(chain)+" collection incomplete", "missing", incomplete)
 	}
 	return published
+}
+
+// checkProgress (under mu) applies the progress bound: a pin that has not
+// advanced for HeadStallAfter while the chain collects without error.
+func (c *Collector) checkProgress(chain model.Chain, height uint64) string {
+	if c.progress == nil {
+		c.progress = map[model.Chain]*progressMark{}
+	}
+	now := c.now()
+	m := c.progress[chain]
+	if m == nil || height != m.height {
+		c.progress[chain] = &progressMark{height: height, advance: now}
+		return ""
+	}
+	if c.Freshness.HeadStallAfter > 0 && now.Sub(m.advance) > c.Freshness.HeadStallAfter {
+		return fmt.Sprintf("the pin has stayed at %d since %s, past the %s progress bound", height, m.advance.UTC().Format(time.RFC3339), c.Freshness.HeadStallAfter)
+	}
+	return ""
 }
 
 // usableDiscovery returns the latest gno discovery when gno.land's latest
@@ -276,12 +364,13 @@ func verified(v model.Verification) bool {
 	return v == model.VerificationCrossChecked || v == model.VerificationLightClient
 }
 
-func (s ChainState) update(err error, verified bool, incomplete string, collection uint64, at time.Time) ChainState {
+func (s ChainState) update(err error, verified bool, incomplete, stale string, collection uint64, at time.Time) ChainState {
 	if err != nil {
 		s.OK = false
 		s.Verified = false
 		s.Complete = false
 		s.Incomplete = ""
+		s.Stale, s.StaleReason = false, ""
 		s.Error = redact.String(err.Error())
 		s.ConsecutiveFailures++
 		return s
@@ -292,9 +381,24 @@ func (s ChainState) update(err error, verified bool, incomplete string, collecti
 		s.Verified = false
 		s.Complete = incomplete == ""
 		s.Incomplete = incomplete
+		s.Stale, s.StaleReason = false, ""
 		s.Error = ""
 		s.ConsecutiveFailures = 0
 		s.ConsecutiveUnverified++
+		return s
+	}
+	if stale != "" {
+		// Read and agreed, but an old head (design §7.11): not fresh; the
+		// last fresh collection stays the reference.
+		s.OK = true
+		s.Verified = true
+		s.Complete = incomplete == ""
+		s.Incomplete = incomplete
+		s.Stale, s.StaleReason = true, stale
+		s.Error = ""
+		s.ConsecutiveFailures = 0
+		s.ConsecutiveUnverified = 0
+		s.ConsecutiveStale++
 		return s
 	}
 	// Read and agreed. A missing cross-chain dependency leaves the chain
@@ -328,12 +432,13 @@ func (c *Collector) verification(primary model.Verification, hasSecond bool, sec
 	}
 }
 
-func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint64) error {
+func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint64) (string, error) {
 	pin, err := c.Gno.LatestPin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	pins.Gno = pin
+	pins.GnoHeads = Heads{Primary: uint64(pin.Height), AgeSeconds: int64(c.now().Sub(pin.Time) / time.Second)}
 	var otherErr error
 	agree := false
 	mismatch := ""
@@ -349,8 +454,19 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 				mismatch = fmt.Sprintf("header mismatch at %d: %s", pin.Height, diff)
 			}
 		}
+		// The second provider's own head, kept independently of the
+		// primary's choice (docs/design.md §7.11: freshness bounds).
+		if head, err := c.Gno2.LatestPin(ctx); err == nil {
+			pins.GnoHeads.Second = uint64(head.Height)
+		} else if otherErr == nil {
+			otherErr = err
+		}
 	}
 	pins.GnoVerified, pins.GnoCrossCheck = c.verification(model.VerificationProvider, c.Gno2 != nil, otherErr, agree, mismatch)
+	stale := staleHead(pins.GnoHeads, c.Freshness.MaxGnoHeadAge, c.Freshness.MaxGnoProviderLag)
+	if stale != "" {
+		pins.GnoCrossCheck = strings.TrimSuffix(pins.GnoCrossCheck+"; ", "; ") + "stale: " + stale
+	}
 
 	stamp := func(p *model.Provenance) {
 		p.Verification = pins.GnoVerified
@@ -364,7 +480,7 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 	disc := GnoDiscovery{Collection: collection, Pin: pin, Clients: map[string]model.Client{}}
 	clients, err := c.Gno.Clients(ctx, pin)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, cl := range clients {
 		stamp(&cl.Provenance)
@@ -373,7 +489,7 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 	}
 	routes, err := c.Gno.Routes(ctx, pin)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, r := range routes {
 		stamp(&r.Provenance)
@@ -386,14 +502,14 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 	// key and is read under the key only (docs/design.md §4.1).
 	gov, err := c.Gno.Governance(ctx, flagSubjects(routes, clients), pin)
 	if err != nil {
-		return err
+		return "", err
 	}
 	stamp(&gov.Provenance)
 	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoGovernance, Key: "ibcgov", Value: gov, Provenance: gov.Provenance})
 	disc.Verified = pins.GnoVerified
 	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoDiscovery, Key: "latest", Value: disc, Provenance: model.Provenance{Chain: model.ChainGno, Height: uint64(pin.Height), Collection: collection, Verification: pins.GnoVerified}})
 	c.Store.PutSnapshots(bundle)
-	return nil
+	return stale, nil
 }
 
 // flagSubjects is every route key plus every client id that is no route's
@@ -428,12 +544,13 @@ func flagSubjects(routes []model.Route, clients []model.Client) []string {
 // exists, it waits for this round's gno collection (gnoDone) within its own
 // deadline. Without a usable discovery the collection is incomplete: the
 // returned string says what it lacks (docs/design.md §7.11).
-func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint64) (string, error) {
+func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint64) (incomplete, stale string, err error) {
 	b, err := c.Eth.Pinned(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	pins.Eth = b
+	pins.EthHeads = Heads{Primary: b.Number, AgeSeconds: c.now().Unix() - int64(b.Timestamp)}
 	primary := c.EthVerification
 	if primary == "" {
 		primary = model.VerificationProvider
@@ -454,12 +571,19 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 				mismatch = fmt.Sprintf("header mismatch at %d: %s vs %s", b.Number, b.Hash, other.Hash)
 			}
 		}
-		if otherErr == nil && agree && b.Finality == "finalized" {
+		// The second provider's own head (its finalized head in the tag
+		// mode), kept independently of the primary's choice: finality is
+		// established by it (design §3.3), and the freshness bounds judge
+		// the pin against it (§7.11).
+		if otherErr == nil {
 			var head ethrpc.Block
 			head, otherErr = c.Eth2.Pinned(ctx)
-			if otherErr == nil && head.Number < b.Number {
-				agree = false
-				mismatch = fmt.Sprintf("block %d is not finalized by the second provider (its finalized head is %d)", b.Number, head.Number)
+			if otherErr == nil {
+				pins.EthHeads.Second = head.Number
+				if agree && b.Finality == "finalized" && head.Number < b.Number {
+					agree = false
+					mismatch = fmt.Sprintf("block %d is not finalized by the second provider (its finalized head is %d)", b.Number, head.Number)
+				}
 			}
 		}
 	}
@@ -467,6 +591,10 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	if agree && c.Eth2 != nil && otherErr == nil && b.Finality == "finalized" {
 		pins.EthCrossCheck = "agreed; finalized by the second provider"
 		pins.EthFinalityIndependent = true
+	}
+	stale = staleHead(pins.EthHeads, c.Freshness.MaxEthHeadAge, c.Freshness.MaxEthProviderLag)
+	if stale != "" {
+		pins.EthCrossCheck = strings.TrimSuffix(pins.EthCrossCheck+"; ", "; ") + "stale: " + stale
 	}
 
 	stamp := func(p *model.Provenance) {
@@ -477,7 +605,7 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	addrs := c.Eth.Addresses()
 	gov, err := c.Eth.Governance(ctx, b)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	stamp(&gov.Provenance)
 	var bundle []store.Snapshot
@@ -488,7 +616,7 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	if addrs.LightClient != (common.Address{}) {
 		lc, err := c.Eth.LightClient(ctx, addrs.LightClient, gov.GovClient, "route", b)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		stamp(&lc.Provenance)
 		bundle = append(bundle, store.Snapshot{Kind: store.KindEthClients, Key: lc.Address, Value: lc, Provenance: lc.Provenance})
@@ -497,9 +625,9 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	// The chain's own subjects (governance, clients) are published whatever
 	// happens to the route below: their alarms never wait on gno.land or on
 	// the route read (readiness per subject, docs/design.md §7.11).
-	partial := func(what string, err error) (string, error) {
+	partial := func(what string, err error) (string, string, error) {
 		c.Store.PutSnapshots(bundle)
-		return "route: " + what + ": " + redact.String(err.Error()), nil
+		return "route: " + what + ": " + redact.String(err.Error()), stale, nil
 	}
 	// The route is discovered on Ethereum: the governance client's route
 	// key, its current client at the pin and its generations from
@@ -532,12 +660,12 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 		return partial("read", ctx.Err())
 	}
 	disc, missing := c.usableDiscovery()
-	var incomplete []string
+	var missingInputs []string
 	var tokens []common.Address
 	var er model.EthRoute
 	switch {
 	case missing != "":
-		incomplete = append(incomplete, missing+": the route's tokens and gno relationship are unknown")
+		missingInputs = append(missingInputs, missing+": the route's tokens and gno relationship are unknown")
 	default:
 		er.GnoDiscovery = disc.Collection
 		gp := model.Provenance{Chain: model.ChainGno, Height: uint64(disc.Pin.Height), BlockHash: disc.Pin.BlockHash, Collection: disc.Collection, Verification: disc.Verified}
@@ -558,18 +686,18 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 			}
 		} else {
 			er.RelationshipMismatch = fmt.Sprintf("no gno.land route names Ethereum's route %s (current client %s) as its counterparty", d.RouteKey, d.CurrentClient)
-			incomplete = append(incomplete, "no gno route matches Ethereum's route: its tokens are unknown")
+			missingInputs = append(missingInputs, "no gno route matches Ethereum's route: its tokens are unknown")
 		}
 	}
 	pre := er
 	if er, err = c.Eth.Route(ctx, d, tokens, b); err != nil {
 		return partial(d.RouteKey, err)
 	}
-	er.GnoDiscovery, er.GnoProvenance, er.GnoRoute, er.GnoCounterparty, er.RelationshipMismatch, er.Incomplete = pre.GnoDiscovery, pre.GnoProvenance, pre.GnoRoute, pre.GnoCounterparty, pre.RelationshipMismatch, incomplete
+	er.GnoDiscovery, er.GnoProvenance, er.GnoRoute, er.GnoCounterparty, er.RelationshipMismatch, er.Incomplete = pre.GnoDiscovery, pre.GnoProvenance, pre.GnoRoute, pre.GnoCounterparty, pre.RelationshipMismatch, missingInputs
 	stamp(&er.Provenance)
 	bundle = append(bundle, store.Snapshot{Kind: store.KindEthRoutes, Key: er.RouteKey, Value: er, Provenance: er.Provenance})
 	c.Store.PutSnapshots(bundle)
-	return strings.Join(incomplete, "; "), nil
+	return strings.Join(missingInputs, "; "), stale, nil
 }
 
 // matchGnoRoute finds the gno route whose client, or one of whose replaced

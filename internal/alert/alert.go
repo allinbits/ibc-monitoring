@@ -93,7 +93,7 @@ func NewManagerWith(st store.Store, log *slog.Logger, opts Options, sinks ...Sin
 			id = fmt.Sprintf("%s#%d", s.Name(), n)
 		}
 		names[s.Name()]++
-		q := &queue{sink: s, id: id, ch: make(chan model.AlarmEvent, opts.Queue), log: log, pending: map[string]model.AlarmEvent{}, now: m.clock}
+		q := &queue{sink: s, id: id, ch: make(chan model.AlarmEvent, opts.Queue), log: log, pending: map[string]model.AlarmEvent{}, latest: map[string]model.Alarm{}, delivered: map[string]model.Alarm{}, now: m.clock}
 		m.queues = append(m.queues, q)
 		m.wg.Add(1)
 		go func() {
@@ -286,8 +286,13 @@ type queue struct {
 
 	mu sync.Mutex
 	// pending is, per alarm key, the latest transition the sink has not
-	// delivered; pendingSince when it became non-empty.
+	// delivered; pendingSince when it became non-empty. latest is the
+	// latest transition enqueued per key and delivered the high-water mark
+	// of what the sink accepted: an event either has superseded is
+	// discarded, never sent (docs/design.md §8.2).
 	pending      map[string]model.AlarmEvent
+	latest       map[string]model.Alarm
+	delivered    map[string]model.Alarm
 	pendingSince time.Time
 	// failingSince is the start of the current streak of refused
 	// deliveries (zero: the last delivery succeeded).
@@ -295,8 +300,14 @@ type queue struct {
 }
 
 // enqueue never blocks: a full queue drops the oldest event, counts it and
-// keeps it pending.
+// keeps it pending. The key's latest transition is noted first, so that an
+// older event still queued is discarded when its turn comes.
 func (q *queue) enqueue(e model.AlarmEvent) {
+	q.mu.Lock()
+	if cur, ok := q.latest[e.Alarm.Key]; !ok || later(e.Alarm, cur) {
+		q.latest[e.Alarm.Key] = e.Alarm
+	}
+	q.mu.Unlock()
 	for {
 		select {
 		case q.ch <- e:
@@ -322,11 +333,26 @@ func later(a, b model.Alarm) bool {
 	return a.Transitions > b.Transitions
 }
 
+// superseded (under mu) reports whether a later transition of e's key was
+// enqueued, or one at least as late was delivered already.
+func (q *queue) superseded(e model.AlarmEvent) bool {
+	if cur, ok := q.latest[e.Alarm.Key]; ok && later(cur, e.Alarm) {
+		return true
+	}
+	if d, ok := q.delivered[e.Alarm.Key]; ok && !later(e.Alarm, d) {
+		return true
+	}
+	return false
+}
+
 // markPending keeps e as the key's undelivered transition unless a later
-// one is pending already.
+// one is pending already, or e is superseded.
 func (q *queue) markPending(e model.AlarmEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.superseded(e) {
+		return
+	}
 	if cur, ok := q.pending[e.Alarm.Key]; ok && later(cur.Alarm, e.Alarm) {
 		return
 	}
@@ -336,13 +362,22 @@ func (q *queue) markPending(e model.AlarmEvent) {
 	q.pending[e.Alarm.Key] = e
 }
 
-// delivered removes the key's pending transition unless a later one is
-// pending.
-func (q *queue) delivered(e model.AlarmEvent) {
+// accepted records the delivered high-water mark and removes the key's
+// pending transition unless a later one is pending.
+func (q *queue) accepted(e model.AlarmEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if cur, ok := q.pending[e.Alarm.Key]; ok && !later(cur.Alarm, e.Alarm) {
-		delete(q.pending, e.Alarm.Key)
+	if d, ok := q.delivered[e.Alarm.Key]; !ok || later(e.Alarm, d) {
+		q.delivered[e.Alarm.Key] = e.Alarm
+	}
+	q.discard(e.Alarm.Key, e.Alarm)
+}
+
+// discard (under mu) drops the key's pending transition when it is not
+// later than a.
+func (q *queue) discard(key string, a model.Alarm) {
+	if cur, ok := q.pending[key]; ok && !later(cur.Alarm, a) {
+		delete(q.pending, key)
 	}
 	if len(q.pending) == 0 {
 		q.pendingSince = time.Time{}
@@ -368,12 +403,20 @@ func (q *queue) status() (pending int, since time.Time, dropped, failed int64, f
 // resend enqueues each pending transition, one event per key, while the
 // queue has room. The pending entry is the key's latest transition, kept
 // whole (type, time, eligibility and alarm together), so a sink never sees
-// an older event's envelope around a newer alarm.
+// an older event's envelope around a newer alarm; one a later transition
+// superseded meanwhile is dropped instead.
 func (q *queue) resend() {
 	q.mu.Lock()
 	events := make([]model.AlarmEvent, 0, len(q.pending))
-	for _, e := range q.pending {
+	for key, e := range q.pending {
+		if q.superseded(e) {
+			delete(q.pending, key)
+			continue
+		}
 		events = append(events, e)
+	}
+	if len(q.pending) == 0 {
+		q.pendingSince = time.Time{}
 	}
 	q.mu.Unlock()
 	for _, e := range events {
@@ -400,6 +443,17 @@ func (q *queue) run(ctx context.Context) {
 }
 
 func (q *queue) deliver(ctx context.Context, e model.AlarmEvent) {
+	// An event a later transition of its key superseded while it waited
+	// is discarded: the sink sees only the latest state per key.
+	q.mu.Lock()
+	stale := q.superseded(e)
+	if stale {
+		q.discard(e.Alarm.Key, e.Alarm)
+	}
+	q.mu.Unlock()
+	if stale {
+		return
+	}
 	if err := q.sink.Send(ctx, e); err != nil {
 		q.failed.Add(1)
 		q.markPending(e)
@@ -414,7 +468,7 @@ func (q *queue) deliver(ctx context.Context, e model.AlarmEvent) {
 	q.mu.Lock()
 	q.failingSince = time.Time{}
 	q.mu.Unlock()
-	q.delivered(e)
+	q.accepted(e)
 }
 
 // drain delivers what is queued now (used on Close).

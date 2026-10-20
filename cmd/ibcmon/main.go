@@ -207,6 +207,8 @@ func loadAddresses(cfg *config.Config) (ethviews.Addresses, error) {
 
 func (rt *runtime) collector() *monitor.Collector {
 	c := &monitor.Collector{Gno: rt.gno, Gno2: rt.gno2, Eth: rt.eth, Eth2: rt.eth2, RequireCrossCheck: rt.cfg.Instance.CrossCheckRequired(), Store: rt.store, Log: rt.log, Timeout: rt.cfg.Monitor.CollectionTimeout, DiscoveryWait: rt.cfg.Monitor.DiscoveryWait}
+	fr := rt.cfg.Monitor.Freshness
+	c.Freshness = monitor.Freshness{MaxGnoHeadAge: fr.GnoMaxHeadAge, MaxEthHeadAge: fr.EthereumMaxHeadAge, MaxGnoProviderLag: fr.GnoMaxProviderLag, MaxEthProviderLag: fr.EthMaxProviderLag, HeadStallAfter: fr.HeadStallAfter}
 	if rt.cfg.Eth.LightClient {
 		c.EthVerification = model.VerificationLightClient
 	}

@@ -211,11 +211,24 @@ export interface EthRoute {
   provenance: Provenance;
 }
 
+/** The route_relationship check's latest verdict: a derived value with two dependencies. */
+export interface RelationshipView {
+  deferred: boolean;
+  mismatch: boolean;
+  severity?: string;
+  title?: string;
+  detail?: string;
+  evaluated_at: string;
+  /** Both inputs' provenance: the Ethereum route, then the gno discovery. */
+  provenance: Provenance[];
+}
+
 export interface RouteView {
   key: string;
   /** Absent for an Ethereum route no gno.land route names. */
   gno?: GnoRoute;
   ethereum?: EthRoute;
+  relationship?: RelationshipView;
 }
 
 export interface Seat {

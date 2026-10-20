@@ -43,6 +43,12 @@ monitor:
   request_timeout: 20s      # every RPC request, both chains
   collection_timeout: 60s   # each chain's collection; past it, a failed collection
   discovery_wait: 5s        # how long Ethereum waits for the first gno discovery before publishing without it
+  freshness:                # a genuine but old head is stale: not fresh, head_stale/<chain> after the deferred threshold
+    gno_max_head_age: 2m
+    ethereum_max_head_age: 45m
+    gno_max_provider_lag: 20
+    ethereum_max_provider_lag: 64
+    head_stall_after: 10m
   client_expiry:
     warn_before: 72h
     critical_before: 12h

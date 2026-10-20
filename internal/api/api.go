@@ -177,11 +177,52 @@ func (s *Server) clients(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// RouteView pairs the two chains' views of one route.
+// RouteView pairs the two chains' views of one route, with the cross-chain
+// relationship as the route_relationship check last evaluated it (design
+// §4.2): a derived value with two dependencies, never a field cached at
+// collection.
 type RouteView struct {
-	Key      string `json:"key"`
-	Gno      any    `json:"gno"`
-	Ethereum any    `json:"ethereum"`
+	Key          string            `json:"key"`
+	Gno          any               `json:"gno"`
+	Ethereum     any               `json:"ethereum"`
+	Relationship *RelationshipView `json:"relationship,omitempty"`
+}
+
+// RelationshipView is the route_relationship check's latest verdict on one
+// Ethereum route.
+type RelationshipView struct {
+	// Deferred is true when the latest evaluation could not judge the
+	// route (a bundle was not fresh); Mismatch is the verdict otherwise.
+	Deferred    bool               `json:"deferred"`
+	Mismatch    bool               `json:"mismatch"`
+	Severity    model.Severity     `json:"severity,omitempty"`
+	Title       string             `json:"title,omitempty"`
+	Detail      string             `json:"detail,omitempty"`
+	EvaluatedAt time.Time          `json:"evaluated_at"`
+	Provenance  []model.Provenance `json:"provenance"`
+}
+
+// relationship reads the latest route_relationship result for routeKey.
+func (s *Server) relationship(routeKey string) *RelationshipView {
+	r, ok := s.Store.LatestResult("route_relationship")
+	if !ok {
+		return nil
+	}
+	v := &RelationshipView{EvaluatedAt: r.FinishedAt, Provenance: []model.Provenance{}}
+	for _, f := range r.Findings {
+		if f.Subject != routeKey {
+			continue
+		}
+		v.Mismatch, v.Severity, v.Title, v.Detail, v.Provenance = f.AlarmKey != "", f.Severity, f.Title, f.Detail, f.Provenance
+		if fr := s.fresh(); fr != nil {
+			for i := range v.Provenance {
+				v.Provenance[i].Stale = !fr.Fresh(v.Provenance[i].Chain, v.Provenance[i])
+			}
+		}
+		return v
+	}
+	v.Deferred = true
+	return v
 }
 
 func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
@@ -195,6 +236,7 @@ func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 		for _, es := range eth {
 			if er, ok := es.Value.(model.EthRoute); ok && (er.GnoRoute == sn.Key || es.Key == sn.Key) {
 				rv.Ethereum = s.mark(es)
+				rv.Relationship = s.relationship(es.Key)
 				matched[es.Key] = true
 				break
 			}
@@ -203,7 +245,7 @@ func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 	}
 	for _, es := range eth {
 		if !matched[es.Key] {
-			out = append(out, RouteView{Key: es.Key, Ethereum: s.mark(es)})
+			out = append(out, RouteView{Key: es.Key, Ethereum: s.mark(es), Relationship: s.relationship(es.Key)})
 		}
 	}
 	if out == nil {

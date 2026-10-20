@@ -397,3 +397,72 @@ func TestReopenAcrossBacklog(t *testing.T) {
 		t.Fatalf("backlog alarm %+v", b)
 	}
 }
+
+// strict accepts only transitions later than the last one it took, like a
+// receiver with a replay filter.
+type strict struct {
+	recorder
+	mu       sync.Mutex
+	failNext int
+	last     map[string]model.Alarm
+}
+
+func (*strict) Name() string { return "strict" }
+func (s *strict) Send(ctx context.Context, e model.AlarmEvent) error {
+	s.mu.Lock()
+	if s.failNext > 0 {
+		s.failNext--
+		s.mu.Unlock()
+		return context.DeadlineExceeded
+	}
+	if s.last == nil {
+		s.last = map[string]model.Alarm{}
+	}
+	if l, ok := s.last[e.Alarm.Key]; ok && !later(e.Alarm, l) {
+		s.mu.Unlock()
+		return context.DeadlineExceeded // older than what it has: rejected
+	}
+	s.last[e.Alarm.Key] = e.Alarm
+	s.mu.Unlock()
+	return s.recorder.Send(ctx, e)
+}
+
+// A raise whose delivery failed while its clear went through is superseded:
+// it is discarded, never retried against a receiver that rejects older
+// transitions, and the backlog drains (ninth round, finding 2).
+func TestSupersededTransitionIsDiscarded(t *testing.T) {
+	st := store.NewMemory(10)
+	s := &strict{failNext: 1}
+	m := NewManagerWith(st, nil, Options{Queue: 8}, s)
+	t.Cleanup(func() { m.Close(time.Second) })
+	var nowUnix atomic.Int64
+	nowUnix.Store(1000)
+	m.now = func() time.Time { return time.Unix(nowUnix.Load(), 0) }
+	f := model.Finding{Subject: "x", Severity: model.SeverityWarning, Title: "x warns", AlarmKey: "c/x"}
+	m.Apply(context.Background(), result(f)) // T1 raised: the sink refuses it
+	time.Sleep(30 * time.Millisecond)
+	nowUnix.Add(60)
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK}) // T2 cleared: accepted
+	ev := s.wait(t, 1)
+	if ev[0].Type != "cleared" || ev[0].Alarm.Transitions != 2 {
+		t.Fatalf("delivered %+v", ev)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(m.Pending()[0]) != 0 && time.Now().Before(deadline) {
+		m.Reconcile(context.Background())
+		time.Sleep(20 * time.Millisecond)
+	}
+	if p := m.Pending()[0]; len(p) != 0 {
+		t.Fatalf("the superseded raise stayed pending: %v", p)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, e := range s.list() {
+		if e.Type == "raised" {
+			t.Fatalf("the superseded raise was delivered: %+v", e)
+		}
+	}
+	m.Reconcile(context.Background())
+	if b, ok := st.Alarm("sink_backlog/strict"); ok && b.State == model.AlarmRaised {
+		t.Fatalf("backlog alarm standing: %+v", b)
+	}
+}

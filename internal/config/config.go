@@ -93,11 +93,23 @@ type Monitor struct {
 	// DiscoveryWait bounds how long the Ethereum collection waits for the
 	// first gno discovery before publishing without it (default 5s).
 	DiscoveryWait time.Duration `yaml:"discovery_wait"`
-	ClientExpiry  struct {
+	// Freshness bounds the selected head per chain (design §7.11).
+	Freshness    Freshness `yaml:"freshness"`
+	ClientExpiry struct {
 		WarnBefore     time.Duration            `yaml:"warn_before"`
 		CriticalBefore time.Duration            `yaml:"critical_before"`
 		StaleAfter     map[string]time.Duration `yaml:"stale_after"`
 	} `yaml:"client_expiry"`
+}
+
+// Freshness bounds the selected head (design §7.11): a genuine but old
+// head is stale and its collection not fresh.
+type Freshness struct {
+	GnoMaxHeadAge      time.Duration `yaml:"gno_max_head_age"`          // default 2m
+	EthereumMaxHeadAge time.Duration `yaml:"ethereum_max_head_age"`     // default 45m
+	GnoMaxProviderLag  uint64        `yaml:"gno_max_provider_lag"`      // default 20 blocks
+	EthMaxProviderLag  uint64        `yaml:"ethereum_max_provider_lag"` // default 64 blocks
+	HeadStallAfter     time.Duration `yaml:"head_stall_after"`          // default 10m
 }
 
 type Sink struct {
@@ -198,6 +210,22 @@ func (c *Config) defaults() {
 	}
 	if c.Monitor.DiscoveryWait == 0 {
 		c.Monitor.DiscoveryWait = 5 * time.Second
+	}
+	fr := &c.Monitor.Freshness
+	if fr.GnoMaxHeadAge == 0 {
+		fr.GnoMaxHeadAge = 2 * time.Minute
+	}
+	if fr.EthereumMaxHeadAge == 0 {
+		fr.EthereumMaxHeadAge = 45 * time.Minute
+	}
+	if fr.GnoMaxProviderLag == 0 {
+		fr.GnoMaxProviderLag = 20
+	}
+	if fr.EthMaxProviderLag == 0 {
+		fr.EthMaxProviderLag = 64
+	}
+	if fr.HeadStallAfter == 0 {
+		fr.HeadStallAfter = 10 * time.Minute
 	}
 	if c.Monitor.DeferredAlarmFailures == 0 {
 		c.Monitor.DeferredAlarmFailures = 6

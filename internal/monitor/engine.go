@@ -149,6 +149,18 @@ func (e *Engine) applyChainAlarms(ctx context.Context, now time.Time) {
 				AlarmKey: "verification_failing/" + string(ch),
 			})
 		}
+		// A genuine but old head (design §7.11): a liveness finding that
+		// fails readiness, never an auto-flag.
+		if st.ConsecutiveStale >= threshold {
+			r.Status = model.CheckAlarm
+			r.Findings = append(r.Findings, model.Finding{
+				Subject:  string(ch),
+				Severity: model.SeverityCritical,
+				Title:    fmt.Sprintf("%s pinned a stale head %d times in a row", ch, st.ConsecutiveStale),
+				Detail:   st.StaleReason + "; nothing from this chain is evaluated until its pin is current again",
+				AlarmKey: "head_stale/" + string(ch),
+			})
+		}
 	}
 	e.Alerts.Apply(ctx, r)
 }

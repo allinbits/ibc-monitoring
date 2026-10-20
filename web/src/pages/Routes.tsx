@@ -1,5 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type Denom, type EthRoute, type GnoRoute, type Meter, type RouteView } from "../api";
+import {
+  api,
+  type Denom,
+  type EthRoute,
+  type GnoRoute,
+  type Meter,
+  type RelationshipView,
+  type RouteView,
+} from "../api";
 import { decimalsOf, formatAmount, percent } from "../amount";
 import { Empty, Id, Loading, Pill, Provenance } from "../components";
 import { iso, unix } from "../time";
@@ -236,11 +244,6 @@ function EthSide({ e }: { e: EthRoute }) {
         <dt>route key / client</dt>
         <dd>
           {e.route_key} / {e.current_client}
-          {e.relationship_mismatch && (
-            <Pill kind="bad" title={e.relationship_mismatch}>
-              gno.land disagrees
-            </Pill>
-          )}
           {e.incomplete?.map((what) => (
             <Pill key={what} kind="warn" title={what}>
               incomplete
@@ -383,12 +386,45 @@ function EthSide({ e }: { e: EthRoute }) {
   );
 }
 
+/** The cross-chain comparison as the check last judged it, with both inputs' provenance. */
+function Relationship({ v }: { v: RelationshipView }) {
+  return (
+    <div className="card">
+      <h4>gno.land ↔ Ethereum relationship</h4>
+      {v.deferred ? (
+        <p className="muted">
+          deferred: one of the two bundles was not fresh at the last evaluation (
+          {iso(v.evaluated_at)})
+        </p>
+      ) : (
+        <p>
+          {v.mismatch ? (
+            <Pill kind="bad" title={v.detail}>
+              gno.land disagrees
+            </Pill>
+          ) : (
+            <Pill kind="ok">agree</Pill>
+          )}{" "}
+          <span className="muted small">{v.title}</span>
+          <div className="muted small">
+            evaluated {iso(v.evaluated_at)} ·{" "}
+            {v.provenance.map((p, i) => (
+              <Provenance key={i} p={p} />
+            ))}
+          </div>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RouteCard({ r }: { r: RouteView }) {
   return (
     <section className="route">
       <h3>Route {r.key}</h3>
       {r.gno ? <GnoSide r={r.gno} /> : <Empty what="gno.land route naming this Ethereum route" />}
       {r.ethereum ? <EthSide e={r.ethereum} /> : <Empty what="Ethereum snapshot" />}
+      {r.relationship && <Relationship v={r.relationship} />}
     </section>
   );
 }
