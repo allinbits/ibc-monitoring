@@ -25,7 +25,13 @@ export function App() {
           <NavLink to="/governance">Governance</NavLink>
         </nav>
         <span className="muted small">
-          {info ? `ibcmon ${info.version} · autoflag ${info.autoflag}` : ""}
+          {info
+            ? `ibcmon ${info.version} · auto-flag ${info.autoflag_effective}${
+                info.autoflag_effective !== info.autoflag_requested
+                  ? ` (requested ${info.autoflag_requested}; the sink is not built, alarms only)`
+                  : ""
+              }`
+            : ""}
         </span>
       </header>
       <main>

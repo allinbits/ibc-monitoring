@@ -1,7 +1,9 @@
 package gnotx
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"testing"
 )
 
@@ -17,10 +19,13 @@ func TestDecodeAminoTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tx.Memo != "fixture" || tx.Other != 0 || len(tx.Calls) != 2 {
+	if tx.Memo != "fixture" || len(tx.Other) != 0 || tx.Messages != 2 || len(tx.Calls) != 2 {
 		t.Fatalf("tx %+v", tx)
 	}
 	c := tx.Calls[0]
+	if c.Index != 0 || tx.Calls[1].Index != 1 {
+		t.Fatalf("indexes %d %d", c.Index, tx.Calls[1].Index)
+	}
 	if c.Caller != "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5" || c.PkgPath != "gno.land/r/aib/ibc/ethrelay" || c.Func != "RecvPacket" || len(c.Args) != 1 {
 		t.Fatalf("call %+v", c)
 	}
@@ -37,4 +42,68 @@ func TestDecodeAminoTx(t *testing.T) {
 	if _, err := Decode([]byte{0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}); err == nil {
 		t.Fatal("hostile length accepted")
 	}
+}
+
+// Hostile inputs are refused at a bounded cost (review finding 7): a
+// transaction past the size limit before anything is scanned, a field bomb
+// at the field limit, too many messages, too many arguments, an oversized
+// value; and unknown messages are counted by index, not kept.
+func TestHostileInputs(t *testing.T) {
+	limits := Limits{MaxTxBytes: 4096, MaxFields: 64, MaxMessages: 4, MaxArgs: 3, MaxValueSize: 128}
+	// Size: refused without scanning.
+	if _, err := DecodeWithLimits(make([]byte, 4097), limits); !errors.Is(err, ErrLimit) {
+		t.Fatalf("size: %v", err)
+	}
+	// A field bomb: 100 two-byte varint fields of number 7.
+	bomb := make([]byte, 0, 200)
+	for i := 0; i < 100; i++ {
+		bomb = append(bomb, 0x38, 0x01)
+	}
+	if _, err := DecodeWithLimits(bomb, limits); !errors.Is(err, ErrLimit) {
+		t.Fatalf("field bomb: %v", err)
+	}
+	// Below the field limit the same unknown fields are skipped, not kept.
+	if tx, err := DecodeWithLimits(bomb[:2*60], limits); err != nil || tx.Messages != 0 {
+		t.Fatalf("unknown fields: %+v %v", tx, err)
+	}
+	// Too many messages (each an Any of another type).
+	other := anyMsg("/vm.m_run", []byte{0x0a, 0x01, 0x41})
+	var many []byte
+	for i := 0; i < 5; i++ {
+		many = append(many, field(1, other)...)
+	}
+	if _, err := DecodeWithLimits(many, limits); !errors.Is(err, ErrLimit) {
+		t.Fatalf("messages: %v", err)
+	}
+	// Unknown messages are reported by index.
+	tx, err := DecodeWithLimits(many[:len(many)/5*3], limits)
+	if err != nil || tx.Messages != 3 || len(tx.Other) != 3 || tx.Other[2] != 2 {
+		t.Fatalf("others: %+v %v", tx, err)
+	}
+	// Too many arguments.
+	call := field(4, []byte("gno.land/r/x"))
+	call = append(call, field(5, []byte("F"))...)
+	for i := 0; i < 4; i++ {
+		call = append(call, field(6, []byte("a"))...)
+	}
+	if _, err := DecodeWithLimits(field(1, anyMsg(MsgCallType, call)), limits); !errors.Is(err, ErrLimit) {
+		t.Fatalf("args: %v", err)
+	}
+	// An oversized value.
+	big := field(1, anyMsg(MsgCallType, append(append(field(4, []byte("gno.land/r/x")), field(5, []byte("F"))...), field(6, make([]byte, 129))...)))
+	if _, err := DecodeWithLimits(big, limits); !errors.Is(err, ErrLimit) {
+		t.Fatalf("value: %v", err)
+	}
+}
+
+// field encodes a length-delimited protobuf field.
+func field(num uint64, payload []byte) []byte {
+	out := binary.AppendUvarint(nil, num<<3|2)
+	out = binary.AppendUvarint(out, uint64(len(payload)))
+	return append(out, payload...)
+}
+
+// anyMsg encodes amino's Any{type_url, value}.
+func anyMsg(typeURL string, value []byte) []byte {
+	return append(field(1, []byte(typeURL)), field(2, value)...)
 }

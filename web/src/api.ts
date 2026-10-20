@@ -349,7 +349,10 @@ export interface Info {
   gno_node: string;
   eth_node: string;
   eth_finality: string;
-  autoflag: string;
+  /** The configuration: "off" | "dry-run" | "on". */
+  autoflag_requested: string;
+  /** What runs: "off" | "dry-run" | "on" | "unavailable" (sink not built). */
+  autoflag_effective: string;
   worker: boolean;
 }
 

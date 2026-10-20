@@ -251,13 +251,12 @@ func runServe(args []string, withMonitor, withWorker bool) error {
 	withMonitor = withMonitor && !*noMonitor
 	withWorker = withWorker && !*noWorker && rt.cfg.Worker.Enabled
 
-	info := api.Info{Version: version, Public: rt.cfg.Instance.Public, StartedAt: time.Now().UTC(), GnoNode: rt.cfg.Gno.Name, EthNode: rt.cfg.Eth.Name, EthFinality: rt.cfg.Eth.Finality, AutoFlag: "off", Worker: withWorker}
-	if rt.cfg.AutoFlag.Enabled {
-		info.AutoFlag = "on"
-		if rt.cfg.AutoFlag.DryRun {
-			info.AutoFlag = "dry-run"
-		}
-		rt.log.Warn("autoflag is configured but the auto-flag sink is not built yet (docs/design.md §8.4, phase 3); alarms only")
+	info := api.Info{Version: version, Public: rt.cfg.Instance.Public, StartedAt: time.Now().UTC(), GnoNode: rt.cfg.Gno.Name, EthNode: rt.cfg.Eth.Name, EthFinality: rt.cfg.Eth.Finality, AutoFlagRequested: "off", AutoFlagEffective: "off", Worker: withWorker}
+	if info.AutoFlagRequested, info.AutoFlagEffective, err = autoFlagStatus(rt.cfg.AutoFlag, os.Getenv); err != nil {
+		return err
+	}
+	if info.AutoFlagRequested != info.AutoFlagEffective {
+		rt.log.Warn("autoflag requested but the auto-flag sink is not built yet: effective status unavailable, alarms only (docs/design.md §8.4, phase 3)", "requested", info.AutoFlagRequested)
 	}
 	srv := &api.Server{Store: rt.store, Info: info}
 	if withWorker && rt.ethc != nil {
@@ -314,4 +313,23 @@ func runCheck(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(map[string]any{"pins": pins.Value, "results": results})
+}
+
+// autoFlagStatus derives the requested and the effective auto-flag status
+// (design §8.4). The sink is not built (phase 3), so whatever is requested
+// the effective status is "unavailable", never "on" or "dry-run"; and the
+// watch-key requirement already applies, so a configuration that could
+// never run live is refused now rather than silently reported.
+func autoFlagStatus(cfg config.AutoFlag, getenv func(string) string) (requested, effective string, err error) {
+	if !cfg.Enabled {
+		return "off", "off", nil
+	}
+	requested = "on"
+	if cfg.DryRun {
+		requested = "dry-run"
+	}
+	if getenv("IBCMON_GNO_WATCH_MNEMONIC") == "" || getenv("IBCMON_ETH_WATCH_PRIVATE_KEY") == "" {
+		return "", "", errors.New("autoflag.enabled needs IBCMON_GNO_WATCH_MNEMONIC and IBCMON_ETH_WATCH_PRIVATE_KEY in the environment (docs/design.md §8.4)")
+	}
+	return requested, "unavailable", nil
 }

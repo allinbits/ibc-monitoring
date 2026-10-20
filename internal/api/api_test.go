@@ -24,7 +24,7 @@ func TestAPI(t *testing.T) {
 	jobs := func() any {
 		return []map[string]any{{"id": 1, "kind": "codehash", "subject": "decision 1/7", "status": "passed", "verdict": "matched via https://rpc.example/v3/TOKENTOKENTOKENTOKEN", "log": "Post \"http://127.0.0.1:1\"", "checks": []any{map[string]any{"name": "n", "note": "secret-ish"}}}}
 	}
-	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now(), GnoNode: "own-gno-node", EthNode: "own-eth-node"}, Jobs: jobs}).Handler())
+	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now(), GnoNode: "own-gno-node", EthNode: "own-eth-node", AutoFlagRequested: "dry-run", AutoFlagEffective: "unavailable"}, Jobs: jobs}).Handler())
 	defer srv.Close()
 
 	get := func(path string) (int, string) {
@@ -74,7 +74,7 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("history %d %s", code, body)
 	}
 	code, body = get("/api/v1/info")
-	if code != 200 || !strings.Contains(body, `"public":true`) {
+	if code != 200 || !strings.Contains(body, `"public":true`) || !strings.Contains(body, `"autoflag_effective":"unavailable"`) || !strings.Contains(body, `"autoflag_requested":"dry-run"`) {
 		t.Fatalf("info %d %s", code, body)
 	}
 	// Public mode: the node label and any error text never reach a visitor,

@@ -86,29 +86,55 @@ func (c *Client) Proof(ctx context.Context, addr common.Address, slots []common.
 // ErrProof is a proof that does not verify.
 var ErrProof = errors.New("proof does not verify")
 
+// Account is what an account proof established about the account: the
+// decoded fields of an existing account, or the canonical empty account
+// (EmptyCodeHash, empty storage root, nonce and balance zero) when the proof
+// shows it absent. Every field comes from the proof, never from the node's
+// report.
+type Account struct {
+	Exists      bool
+	Nonce       uint64
+	Balance     *big.Int
+	StorageRoot common.Hash
+	CodeHash    common.Hash
+}
+
+// EmptyCodeHash is keccak256 of no code, derived here and not read from any
+// answer.
+var EmptyCodeHash = crypto.Keccak256Hash(nil)
+
 // Verify checks the account proof against stateRoot and every storage proof
-// against the proven account's storage root, and returns the proven slot
-// values. A non-existent account proves as empty (zero storage root); a slot
+// against the proven account's storage root, and returns the proven account
+// and slot values. The node's reported fields must equal the proven ones;
+// for an absent account they must be the canonical empty values, so a report
+// cannot pair a genuine absence proof with an invented code hash. A slot
 // absent from the trie proves as zero.
-func (p AccountProof) Verify(stateRoot common.Hash) (map[common.Hash]*big.Int, error) {
+func (p AccountProof) Verify(stateRoot common.Hash) (Account, map[common.Hash]*big.Int, error) {
 	accountKey := crypto.Keccak256(p.Address.Bytes())
 	accRLP, err := verifyBranch(stateRoot, accountKey, p.AccountProof)
 	if err != nil {
-		return nil, fmt.Errorf("%w: account %s: %v", ErrProof, p.Address, err)
+		return Account{}, nil, fmt.Errorf("%w: account %s: %v", ErrProof, p.Address, err)
 	}
-	storageRoot := types.EmptyRootHash
+	account := Account{Balance: new(big.Int), StorageRoot: types.EmptyRootHash, CodeHash: EmptyCodeHash}
 	if len(accRLP) > 0 {
 		var acc types.StateAccount
 		if err := rlp.DecodeBytes(accRLP, &acc); err != nil {
-			return nil, fmt.Errorf("%w: account %s: %v", ErrProof, p.Address, err)
+			return Account{}, nil, fmt.Errorf("%w: account %s: %v", ErrProof, p.Address, err)
 		}
-		storageRoot = acc.Root
+		account = Account{Exists: true, Nonce: acc.Nonce, Balance: acc.Balance.ToBig(), StorageRoot: acc.Root, CodeHash: common.BytesToHash(acc.CodeHash)}
 		if acc.Root != p.StorageHash || acc.CodeHash == nil || !bytes.Equal(acc.CodeHash, p.CodeHash.Bytes()) || acc.Nonce != p.Nonce || (p.Balance != nil && acc.Balance.ToBig().Cmp(p.Balance) != 0) {
-			return nil, fmt.Errorf("%w: account %s: the proven account differs from the reported one", ErrProof, p.Address)
+			return Account{}, nil, fmt.Errorf("%w: account %s: the proven account differs from the reported one", ErrProof, p.Address)
 		}
-	} else if p.StorageHash != (common.Hash{}) && p.StorageHash != types.EmptyRootHash {
-		return nil, fmt.Errorf("%w: account %s absent but a storage root was reported", ErrProof, p.Address)
+	} else {
+		// Absent: the report must say so in every field.
+		emptyStorage := p.StorageHash == (common.Hash{}) || p.StorageHash == types.EmptyRootHash
+		emptyCode := p.CodeHash == (common.Hash{}) || p.CodeHash == EmptyCodeHash
+		emptyBalance := p.Balance == nil || p.Balance.Sign() == 0
+		if !emptyStorage || !emptyCode || !emptyBalance || p.Nonce != 0 {
+			return Account{}, nil, fmt.Errorf("%w: account %s is absent but the report describes an account", ErrProof, p.Address)
+		}
 	}
+	storageRoot := account.StorageRoot
 	values := make(map[common.Hash]*big.Int, len(p.Storage))
 	for _, sp := range p.Storage {
 		slotKey := crypto.Keccak256(sp.Key.Bytes())
@@ -116,23 +142,23 @@ func (p AccountProof) Verify(stateRoot common.Hash) (map[common.Hash]*big.Int, e
 		if storageRoot != types.EmptyRootHash {
 			raw, err = verifyBranch(storageRoot, slotKey, sp.Proof)
 			if err != nil {
-				return nil, fmt.Errorf("%w: slot %s: %v", ErrProof, sp.Key, err)
+				return Account{}, nil, fmt.Errorf("%w: slot %s: %v", ErrProof, sp.Key, err)
 			}
 		}
 		v := new(big.Int)
 		if len(raw) > 0 {
 			var content []byte
 			if err := rlp.DecodeBytes(raw, &content); err != nil {
-				return nil, fmt.Errorf("%w: slot %s: %v", ErrProof, sp.Key, err)
+				return Account{}, nil, fmt.Errorf("%w: slot %s: %v", ErrProof, sp.Key, err)
 			}
 			v.SetBytes(content)
 		}
 		if sp.Value != nil && v.Cmp(sp.Value) != 0 {
-			return nil, fmt.Errorf("%w: slot %s: proven %s, reported %s", ErrProof, sp.Key, v, sp.Value)
+			return Account{}, nil, fmt.Errorf("%w: slot %s: proven %s, reported %s", ErrProof, sp.Key, v, sp.Value)
 		}
 		values[sp.Key] = v
 	}
-	return values, nil
+	return account, values, nil
 }
 
 // verifyBranch verifies a Merkle-Patricia proof (hex-encoded RLP nodes)

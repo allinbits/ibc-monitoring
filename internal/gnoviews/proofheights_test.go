@@ -2,11 +2,27 @@ package gnoviews
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/allinbits/ibc-monitoring/internal/gnorpc"
 	"github.com/allinbits/ibc-monitoring/internal/gnorpc/gnorpctest"
+	"github.com/allinbits/ibc-monitoring/internal/ibcpacket"
 )
+
+// pbField encodes a length-delimited protobuf field; anyMsg an amino Any.
+func pbField(num uint64, payload []byte) []byte {
+	out := binary.AppendUvarint(nil, num<<3|2)
+	out = binary.AppendUvarint(out, uint64(len(payload)))
+	return append(out, payload...)
+}
+
+func anyMsg(typeURL string, value []byte) []byte {
+	return append(pbField(1, []byte(typeURL)), pbField(2, value)...)
+}
 
 // The amino transaction fixture of internal/gnotx: two ethrelay calls
 // (RecvPacket at proof slot 10000000, Acknowledgement at 10000001) for packet
@@ -18,20 +34,39 @@ func TestPacketEventsProofHeights(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attrs := func(seq string) map[string]string {
-		return map[string]string{"packet_source_client": "client-0", "packet_dest_client": "ethereum-1", "packet_sequence": seq}
+	// The fixture's packet 7, as the core encodes it in its events.
+	packet7 := ibcpacket.Packet{Sequence: 7, SourceClient: "client-0", DestinationClient: "ethereum-1", TimeoutTimestamp: 1776690000,
+		Payloads: []ibcpacket.Payload{{SourcePort: "transfer", DestinationPort: "transfer", Version: "ics20-1", Encoding: "application/x-solidity-abi", Value: []byte{0xde, 0xad}}}}
+	packet8 := packet7
+	packet8.Sequence = 8
+	attrs := func(p ibcpacket.Packet) map[string]string {
+		return map[string]string{"packet_source_client": p.SourceClient, "packet_dest_client": p.DestinationClient, "packet_sequence": strconv.FormatUint(p.Sequence, 10), "encoded_packet_hex": hex.EncodeToString(ibcpacket.EncodeProto(p))}
 	}
+	// tx 2: a MsgRun (which the monitor does not decode) that received packet
+	// 7, followed by an ethrelay.RecvPacket of the same packet, which the
+	// core answered with a receipt no-op: the event's emitter is uncertain.
+	relayTx, _ := hex.DecodeString(relayTxHex)
+	runThenRelay := append(pbField(1, anyMsg("/vm.m_run", pbField(1, []byte("g1caller")))), relayTx...)
+	// tx 3: two ethrelay.RecvPacket invocations of packet 7 (the second a
+	// no-op): ambiguous as well.
+	twice := append(append([]byte(nil), relayTx...), relayTx...)
 	f.Blocks = map[string]gnorpctest.BlockFixture{
 		"4100": {
-			Txs: []string{relayTxHex, "ff"},
+			Txs: []string{relayTxHex, "ff", hex.EncodeToString(runThenRelay), hex.EncodeToString(twice)},
 			Events: [][]gnorpctest.EventFixture{
 				{ // tx 0: the relayer's receive and acknowledgement of packet 7
-					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs("7")},
-					{Type: "acknowledge_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs("7")},
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
+					{Type: "acknowledge_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
 					{Type: "fungible_token_packet", PkgPath: "gno.land/r/aib/ibc/apps/transfer", Attrs: map[string]string{}},
 				},
 				{ // tx 1: an undecodable transaction that emitted a receive of packet 8
-					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs("8")},
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet8)},
+				},
+				{ // tx 2: the MsgRun emitted the event; the ethrelay call was a no-op
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
+				},
+				{ // tx 3: the first invocation emitted; the second was a no-op
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
 				},
 			},
 		},
@@ -43,20 +78,39 @@ func TestPacketEventsProofHeights(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 3 {
+	if len(evs) != 5 {
 		t.Fatalf("events %+v", evs)
 	}
-	recv, ack, orphan := evs[0], evs[1], evs[2]
-	if !recv.Resolved || recv.Proof.Height != 10000000 || recv.Proof.Revision != 0 || recv.Sequence != 7 || recv.TxIndex != 0 || recv.Packet.Sequence != 7 {
+	recv, ack, orphan, mixed, double := evs[0], evs[1], evs[2], evs[3], evs[4]
+	if !recv.Resolved || recv.Proof.Height != 10000000 || recv.Proof.Revision != 0 || recv.Sequence != 7 || recv.TxIndex != 0 || recv.MsgIndex != 0 || recv.Packet.Sequence != 7 {
 		t.Fatalf("recv %+v", recv)
 	}
-	if !ack.Resolved || ack.Proof.Height != 10000001 || ack.Type != "acknowledge_packet" {
+	if !ack.Resolved || ack.Proof.Height != 10000001 || ack.Type != "acknowledge_packet" || ack.MsgIndex != 1 {
 		t.Fatalf("ack %+v", ack)
 	}
 	// The event of an undecodable transaction stays unresolved with a reason;
 	// nothing substitutes a height for it.
 	if orphan.Resolved || orphan.Sequence != 8 || orphan.TxIndex != 1 || orphan.Reason == "" || orphan.Proof.Height != 0 {
 		t.Fatalf("orphan %+v", orphan)
+	}
+	// A MsgRun receive followed by an ethrelay no-op: deferred, the no-op's
+	// height is never taken (review finding 5).
+	if mixed.Resolved || mixed.TxIndex != 2 || !strings.Contains(mixed.Reason, "deferred") || !strings.Contains(mixed.Reason, "does not decode") {
+		t.Fatalf("mixed %+v", mixed)
+	}
+	// Two invocations of the same packet: ambiguous, deferred.
+	if double.Resolved || double.TxIndex != 3 || !strings.Contains(double.Reason, "2 invocations") {
+		t.Fatalf("double %+v", double)
+	}
+	// An event whose packet bytes differ from every invocation's (another
+	// payload) is not attributed by its key alone.
+	altered := packet7
+	altered.Payloads[0].Value = []byte{0xbe, 0xef}
+	f.Blocks["4101"] = gnorpctest.BlockFixture{Txs: []string{relayTxHex}, Events: [][]gnorpctest.EventFixture{{{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(altered)}}}}
+	srv.Set("", "")
+	evs, err = v.PacketEvents(context.Background(), 4101)
+	if err != nil || len(evs) != 1 || evs[0].Resolved || !strings.Contains(evs[0].Reason, "no ethrelay invocation") {
+		t.Fatalf("altered %+v %v", evs, err)
 	}
 	// A block with no packet event answers nothing without reading its txs.
 	none, err := v.PacketEvents(context.Background(), 4200)

@@ -140,24 +140,23 @@ func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block ethrpc.Bl
 		w.update(j)
 		return j
 	}
-	if _, err := proof.Verify(block.StateRoot); err != nil {
+	account, _, err := proof.Verify(block.StateRoot)
+	if err != nil {
 		j.Status, j.Verdict, j.FinishedAt = "unverified", "account proof does not verify against the agreed state root: "+redact.String(err.Error()), time.Now()
 		w.update(j)
 		return j
 	}
-	hash, size, err := w.Eth.CodeHash(ctx, t.Address, block.Number)
+	// The bytecode is fetched once; every content check below runs on this
+	// buffer, after it has been authenticated against the proven code hash
+	// (the canonical empty hash for an absent account, derived locally).
+	code, err := w.Eth.Code(ctx, t.Address, block.Number)
 	if err != nil {
-		j.Status, j.Verdict, j.FinishedAt = "error", redact.String(err.Error()), time.Now()
+		j.Status, j.Verdict, j.FinishedAt = "unverified", "no bytecode read: "+redact.String(err.Error()), time.Now()
 		w.update(j)
 		return j
 	}
-	// An absent account proves as the empty code hash; a present one carries
-	// its code hash. The fetched bytes must hash to the proven value.
-	proven := proof.CodeHash
-	if size == 0 && (proven == (common.Hash{}) || proven == crypto.Keccak256Hash(nil)) {
-		proven = crypto.Keccak256Hash(nil)
-	}
-	auth := JobCheck{Name: "fetched code hashes to the proven code hash", Expected: proven.Hex(), Actual: hash.Hex(), Passed: hash == proven}
+	hash := crypto.Keccak256Hash(code)
+	auth := JobCheck{Name: "fetched code hashes to the proven code hash", Expected: account.CodeHash.Hex(), Actual: hash.Hex(), Passed: hash == account.CodeHash}
 	j.Checks = append(j.Checks, auth)
 	if !auth.Passed {
 		j.Status, j.Verdict, j.FinishedAt = "unverified", "the node's bytecode does not match the account's proven code hash", time.Now()
@@ -167,18 +166,17 @@ func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block ethrpc.Bl
 	prov.StateVerification = model.StateProof
 	j.Provenance = &prov
 	passed := true
-	code := JobCheck{Name: "address holds code", Actual: fmt.Sprintf("%d bytes", size), Passed: size > 0}
-	if size == 0 {
-		code.Note = "no code at the candidate address"
+	size := len(code)
+	hasCode := JobCheck{Name: "address holds code", Actual: fmt.Sprintf("%d bytes", size), Passed: account.Exists && size > 0}
+	if !hasCode.Passed {
+		hasCode.Note = "no code at the candidate address"
 	}
-	passed = passed && code.Passed
-	j.Checks = append(j.Checks, code)
+	passed = passed && hasCode.Passed
+	j.Checks = append(j.Checks, hasCode)
 	designator := JobCheck{Name: "not an EIP-7702 delegation designator", Passed: true}
-	if size == 23 {
-		if c, err := w.Eth.Code(ctx, t.Address, block.Number); err == nil && len(c) == 23 && c[0] == 0xef && c[1] == 0x01 && c[2] == 0x00 {
-			designator.Passed = false
-			designator.Note = "the address is a delegation designator; governance refuses it"
-		}
+	if size == 23 && code[0] == 0xef && code[1] == 0x01 && code[2] == 0x00 {
+		designator.Passed = false
+		designator.Note = "the address is a delegation designator; governance refuses it"
 	}
 	passed = passed && designator.Passed
 	j.Checks = append(j.Checks, designator)

@@ -29,8 +29,13 @@ type Info struct {
 	GnoNode     string    `json:"gno_node"`
 	EthNode     string    `json:"eth_node"`
 	EthFinality string    `json:"eth_finality"`
-	AutoFlag    string    `json:"autoflag"` // "off" | "dry-run" | "on"
-	Worker      bool      `json:"worker"`
+	// AutoFlagRequested is the configuration ("off" | "dry-run" | "on");
+	// AutoFlagEffective is what runs: "off", "dry-run", "on", or
+	// "unavailable" while the sink is not built (design §8.4). The console
+	// shows the effective status and never claims a sink that does not run.
+	AutoFlagRequested string `json:"autoflag_requested"`
+	AutoFlagEffective string `json:"autoflag_effective"`
+	Worker            bool   `json:"worker"`
 }
 
 // Server is the HTTP API.

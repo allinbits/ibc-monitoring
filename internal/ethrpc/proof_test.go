@@ -62,37 +62,74 @@ func TestAccountProofVerify(t *testing.T) {
 		StorageHash:  storageRoot,
 		Storage:      []StorageProof{{Key: slot, Value: value, Proof: proofOf(t, storage, crypto.Keccak256(slot.Bytes()))}},
 	}
-	values, err := p.Verify(stateRoot)
+	account, values, err := p.Verify(stateRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if values[slot].Cmp(value) != 0 {
 		t.Fatalf("value %s", values[slot])
 	}
+	if !account.Exists || account.Nonce != 7 || account.Balance.Int64() != 99 || account.CodeHash != common.BytesToHash(acc.CodeHash) || account.StorageRoot != storageRoot {
+		t.Fatalf("account %+v", account)
+	}
 
 	// A lying node: the reported value differs from the proven one.
 	lie := p
 	lie.Storage = []StorageProof{{Key: slot, Value: big.NewInt(1), Proof: p.Storage[0].Proof}}
-	if _, err := lie.Verify(stateRoot); !errors.Is(err, ErrProof) {
+	if _, _, err := lie.Verify(stateRoot); !errors.Is(err, ErrProof) {
 		t.Fatalf("lie accepted: %v", err)
 	}
 	// A wrong state root (another header).
-	if _, err := p.Verify(common.HexToHash("0x01")); !errors.Is(err, ErrProof) {
+	if _, _, err := p.Verify(common.HexToHash("0x01")); !errors.Is(err, ErrProof) {
 		t.Fatalf("wrong root accepted: %v", err)
 	}
 	// A storage root that does not match the proven account.
 	bad := p
 	bad.StorageHash = common.HexToHash("0x02")
-	if _, err := bad.Verify(stateRoot); !errors.Is(err, ErrProof) {
+	if _, _, err := bad.Verify(stateRoot); !errors.Is(err, ErrProof) {
 		t.Fatalf("wrong storage root accepted: %v", err)
 	}
 	// An absent slot proves as zero.
 	absent := common.HexToHash("0x0b")
 	q := p
 	q.Storage = []StorageProof{{Key: absent, Value: big.NewInt(0), Proof: proofOf(t, storage, crypto.Keccak256(absent.Bytes()))}}
-	values, err = q.Verify(stateRoot)
+	_, values, err = q.Verify(stateRoot)
 	if err != nil || values[absent].Sign() != 0 {
 		t.Fatalf("absent slot: %v %v", values, err)
+	}
+}
+
+// An absence proof is accepted only with the canonical empty report, and the
+// account it yields carries the empty code hash derived here, so a provider
+// cannot pair a genuine absence with an invented code hash (review finding 1).
+func TestAbsentAccount(t *testing.T) {
+	tdb := triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil)
+	other := common.HexToAddress("0x000000000000000000000000000000000000aaaa")
+	absent := common.HexToAddress("0x000000000000000000000000000000000000bbbb")
+	state := trie.NewEmpty(tdb)
+	acc := types.StateAccount{Nonce: 1, Balance: uint256.NewInt(1), Root: types.EmptyRootHash, CodeHash: crypto.Keccak256([]byte{1})}
+	accRLP, _ := rlp.EncodeToBytes(&acc)
+	state.MustUpdate(crypto.Keccak256(other.Bytes()), accRLP)
+	root := state.Hash()
+	honest := AccountProof{Address: absent, AccountProof: proofOf(t, state, crypto.Keccak256(absent.Bytes())), Balance: big.NewInt(0), CodeHash: common.Hash{}, StorageHash: common.Hash{}}
+	account, _, err := honest.Verify(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Exists || account.CodeHash != EmptyCodeHash || account.StorageRoot != types.EmptyRootHash || account.Nonce != 0 || account.Balance.Sign() != 0 {
+		t.Fatalf("absent account %+v", account)
+	}
+	// A lying provider: the same genuine absence proof with an invented code
+	// hash (or nonce, balance, storage root) is refused.
+	for _, lie := range []AccountProof{
+		{Address: absent, AccountProof: honest.AccountProof, CodeHash: crypto.Keccak256Hash([]byte{0x60, 0x80}), Balance: big.NewInt(0)},
+		{Address: absent, AccountProof: honest.AccountProof, Nonce: 3, Balance: big.NewInt(0)},
+		{Address: absent, AccountProof: honest.AccountProof, Balance: big.NewInt(5)},
+		{Address: absent, AccountProof: honest.AccountProof, StorageHash: common.HexToHash("0x33"), Balance: big.NewInt(0)},
+	} {
+		if _, _, err := lie.Verify(root); !errors.Is(err, ErrProof) {
+			t.Fatalf("lie accepted: %+v: %v", lie, err)
+		}
 	}
 }
 

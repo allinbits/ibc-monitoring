@@ -3,6 +3,7 @@ package gnoviews
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/allinbits/ibc-monitoring/internal/ethrelaywire"
@@ -15,8 +16,8 @@ import (
 const EthRelayPath = "gno.land/r/aib/ibc/ethrelay"
 
 // PacketEvent is a packet event of a block with the proof height its
-// transaction carried, when the monitor could decode it (docs/design.md
-// §4.1, proof heights).
+// transaction carried, when the attribution is certain (docs/design.md §4.1,
+// proof heights).
 type PacketEvent struct {
 	Height   int64
 	TxIndex  int
@@ -24,13 +25,16 @@ type PacketEvent struct {
 	Source   string
 	Dest     string
 	Sequence uint64
-	// Proof is the proof height of the transaction's matching message;
-	// Resolved is false when none could be decoded or matched, in which case
-	// the comparison is deferred and the client's head never substituted.
+	// Packet is the event's own packet (the core's encoded_packet_hex).
+	Packet ibcpacket.Packet
+	// Proof is the proof height of the one invocation that produced the
+	// event; MsgIndex its message index. Resolved is false when the
+	// attribution is uncertain, in which case the comparison is deferred and
+	// the client's head never substituted; Reason says why.
 	Proof    ethrelaywire.Height
+	MsgIndex int
 	Resolved bool
 	Reason   string
-	Packet   ibcpacket.Packet
 }
 
 var eventKinds = map[string]ethrelaywire.Kind{
@@ -45,10 +49,22 @@ var funcKinds = map[string]ethrelaywire.Kind{
 	"Timeout":         ethrelaywire.KindTimeout,
 }
 
-// PacketEvents reads a block's packet events and associates each with the
-// proof height of the ethrelay message in the same transaction that names
-// the same packet (source client and sequence). A transaction the decoders
-// cannot read leaves its events unresolved.
+// invocation is one decoded ethrelay call of a transaction.
+type invocation struct {
+	msgIndex int
+	kind     ethrelaywire.Kind
+	msg      ethrelaywire.Message
+	commit   [32]byte
+}
+
+// PacketEvents reads a block's packet events and attributes each to the
+// invocation that produced it, certain only when: the event's packet bytes
+// and the invocation's packet have the same commitment, exactly one
+// invocation of the event's kind in the transaction names that packet, and
+// the transaction holds no message the monitor cannot decode. A second
+// invocation for the same packet (which the core answers with a receipt
+// no-op and no event) or an unknown message could have been the emitter,
+// so such a transaction is deferred whole.
 func (v *Views) PacketEvents(ctx context.Context, height int64) ([]PacketEvent, error) {
 	events, err := v.rpc.BlockResults(ctx, height)
 	if err != nil {
@@ -67,60 +83,77 @@ func (v *Views) PacketEvents(ctx context.Context, height int64) ([]PacketEvent, 
 	if err != nil {
 		return nil, err
 	}
-	// Decode every ethrelay message per transaction once.
-	type decoded struct {
-		kind ethrelaywire.Kind
-		msg  ethrelaywire.Message
-	}
-	perTx := map[int][]decoded{}
-	txErr := map[int]string{}
+	perTx := map[int][]invocation{}
+	deferred := map[int]string{}
 	for i, raw := range txs {
 		tx, err := gnotx.Decode(raw)
 		if err != nil {
-			txErr[i] = "transaction undecodable: " + err.Error()
+			deferred[i] = "transaction undecodable: " + err.Error()
 			continue
 		}
-		if tx.Other > 0 {
-			txErr[i] = fmt.Sprintf("%d message(s) of a kind the monitor does not decode", tx.Other)
+		if len(tx.Other) > 0 {
+			deferred[i] = fmt.Sprintf("%d message(s) of a kind the monitor does not decode (indexes %v) could have emitted the event", len(tx.Other), tx.Other)
 		}
 		for _, c := range tx.Calls {
 			kind, ok := funcKinds[c.Func]
-			if c.PkgPath != EthRelayPath || !ok || len(c.Args) != 1 {
+			if c.PkgPath != EthRelayPath || !ok {
+				continue
+			}
+			if len(c.Args) != 1 {
+				deferred[i] = fmt.Sprintf("ethrelay call %d with %d arguments", c.Index, len(c.Args))
 				continue
 			}
 			b, err := base64.StdEncoding.DecodeString(c.Args[0])
 			if err != nil {
-				txErr[i] = "ethrelay argument is not base64"
+				deferred[i] = fmt.Sprintf("ethrelay call %d: argument is not base64", c.Index)
 				continue
 			}
 			m, err := ethrelaywire.Decode(kind, b)
 			if err != nil {
-				txErr[i] = "ethrelay message undecodable: " + err.Error()
+				deferred[i] = fmt.Sprintf("ethrelay call %d: %v", c.Index, err)
 				continue
 			}
-			perTx[i] = append(perTx[i], decoded{kind: kind, msg: m})
+			perTx[i] = append(perTx[i], invocation{msgIndex: c.Index, kind: kind, msg: m, commit: ibcpacket.Commit(m.Packet)})
 		}
 	}
 	out := make([]PacketEvent, 0, len(wanted))
 	for _, e := range wanted {
-		pe := PacketEvent{Height: height, TxIndex: e.TxIndex, Type: e.Type, Source: e.Attrs["packet_source_client"], Dest: e.Attrs["packet_dest_client"]}
+		pe := PacketEvent{Height: height, TxIndex: e.TxIndex, Type: e.Type, Source: e.Attrs["packet_source_client"], Dest: e.Attrs["packet_dest_client"], MsgIndex: -1}
 		if _, err := fmt.Sscanf(e.Attrs["packet_sequence"], "%d", &pe.Sequence); err != nil {
 			pe.Reason = "event without a sequence"
 			out = append(out, pe)
 			continue
 		}
-		kind := eventKinds[e.Type]
-		for _, d := range perTx[e.TxIndex] {
-			if d.kind == kind && d.msg.Packet.SourceClient == pe.Source && d.msg.Packet.DestinationClient == pe.Dest && d.msg.Packet.Sequence == pe.Sequence {
-				pe.Proof, pe.Packet, pe.Resolved = d.msg.ProofHeight, d.msg.Packet, true
-				break
+		raw, err := hex.DecodeString(e.Attrs["encoded_packet_hex"])
+		if err != nil {
+			pe.Reason = "event without packet bytes"
+			out = append(out, pe)
+			continue
+		}
+		if pe.Packet, err = ibcpacket.DecodeProto(raw); err != nil {
+			pe.Reason = "event packet undecodable: " + err.Error()
+			out = append(out, pe)
+			continue
+		}
+		if r, ok := deferred[e.TxIndex]; ok {
+			pe.Reason = "deferred: " + r
+			out = append(out, pe)
+			continue
+		}
+		want := ibcpacket.Commit(pe.Packet)
+		var matches []invocation
+		for _, inv := range perTx[e.TxIndex] {
+			if inv.kind == eventKinds[e.Type] && inv.commit == want && inv.msg.Packet.Sequence == pe.Sequence && inv.msg.Packet.SourceClient == pe.Source {
+				matches = append(matches, inv)
 			}
 		}
-		if !pe.Resolved {
-			pe.Reason = "no ethrelay message of this packet in its transaction"
-			if r, ok := txErr[e.TxIndex]; ok {
-				pe.Reason = r
-			}
+		switch len(matches) {
+		case 1:
+			pe.Proof, pe.MsgIndex, pe.Resolved = matches[0].msg.ProofHeight, matches[0].msgIndex, true
+		case 0:
+			pe.Reason = "no ethrelay invocation of this packet in its transaction"
+		default:
+			pe.Reason = fmt.Sprintf("deferred: %d invocations name this packet (a later one is a receipt no-op); the emitter is uncertain", len(matches))
 		}
 		out = append(out, pe)
 	}
