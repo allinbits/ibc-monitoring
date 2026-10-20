@@ -3818,7 +3818,76 @@
  },
  {
   "type": "function",
-  "name": "gnoEvidenceModuleVersion",
+  "name": "RECONCILE",
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "",
+    "type": "address",
+    "internalType": "address"
+   }
+  ],
+  "stateMutability": "view"
+ },
+ {
+  "type": "function",
+  "name": "RECONCILE_HASH",
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "",
+    "type": "bytes32",
+    "internalType": "bytes32"
+   }
+  ],
+  "stateMutability": "view"
+ },
+ {
+  "type": "function",
+  "name": "ackHook",
+  "inputs": [
+   {
+    "name": "clientId",
+    "type": "string",
+    "internalType": "string"
+   },
+   {
+    "name": "sequence",
+    "type": "uint64",
+    "internalType": "uint64"
+   },
+   {
+    "name": "outcome",
+    "type": "uint8",
+    "internalType": "enum IGnoICS20ControlsTypes.Outcome"
+   },
+   {
+    "name": "token",
+    "type": "address",
+    "internalType": "address"
+   },
+   {
+    "name": "refundee",
+    "type": "address",
+    "internalType": "address"
+   },
+   {
+    "name": "amount",
+    "type": "uint256",
+    "internalType": "uint256"
+   },
+   {
+    "name": "notice",
+    "type": "bytes",
+    "internalType": "bytes"
+   }
+  ],
+  "outputs": [],
+  "stateMutability": "nonpayable"
+ },
+ {
+  "type": "function",
+  "name": "gnoControlsModuleVersion",
   "inputs": [],
   "outputs": [
    {
@@ -3844,6 +3913,44 @@
  },
  {
   "type": "error",
+  "name": "DuplicateKey",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "HoldStands",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "NotDelegated",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "NotHook",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "UnknownKey",
+  "inputs": []
+ },
+ {
+  "type": "function",
+  "name": "gnoEvidenceModuleVersion",
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "",
+    "type": "uint256",
+    "internalType": "uint256"
+   }
+  ],
+  "stateMutability": "pure"
+ },
+ {
+  "type": "error",
   "name": "InvalidMerklePrefix",
   "inputs": [
    {
@@ -3856,11 +3963,6 @@
  {
   "type": "error",
   "name": "NoAcknowledgements",
-  "inputs": []
- },
- {
-  "type": "error",
-  "name": "NotDelegated",
   "inputs": []
  },
  {

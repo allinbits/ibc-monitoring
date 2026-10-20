@@ -54,7 +54,7 @@ func TestClients(t *testing.T) {
 	if eth.TrustingPeriod != wantTP {
 		t.Fatalf("trusting period %s, want %s", eth.TrustingPeriod, wantTP)
 	}
-	wantHead := time.Unix(1775733600, 0).UTC()
+	wantHead := time.Unix(1792600000, 0).UTC()
 	if !eth.HeadTime.Equal(wantHead) || !eth.Expiry.Equal(wantHead.Add(wantTP)) {
 		t.Fatalf("head %s expiry %s", eth.HeadTime, eth.Expiry)
 	}

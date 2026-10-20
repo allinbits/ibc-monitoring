@@ -39,6 +39,7 @@ def main(out, dest):
         "GnoICS20Transfer": merge(
             load(out, "GnoICS20Transfer.sol/GnoICS20Transfer.json"),
             load(out, "IGnoICS20Controls.sol/IGnoICS20Controls.json"),
+            load(out, "GnoICS20Controls.sol/GnoICS20Controls.json"),
             load(out, "GnoICS20Evidence.sol/GnoICS20Evidence.json"),
             load(out, "GnoICS20Reconcile.sol/GnoICS20Reconcile.json"),
         ),

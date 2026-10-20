@@ -1,0 +1,61 @@
+# ibcmon configuration. Copy to ibcmon.yaml (git-ignored). ${VAR} references
+# are expanded from the environment (.env, see .env.example); keep secrets
+# there, not here.
+
+instance:
+  public: false          # true: read-only public mode with the non-authoritative banner
+  listen: ":8080"
+  history: 500           # results kept per check
+
+gno:
+  rpc_url: ${IBCMON_GNO_RPC_URL}
+  rpc_url_2: ${IBCMON_GNO_RPC_URL_2}   # second provider, block-hash cross-check only
+  name: own-gno-node
+  pkgpaths:
+    core: gno.land/r/aib/ibc/core
+    transfer: gno.land/r/aib/ibc/apps/transfer
+    ibcgov: gno.land/r/aib/ibc/ibcgov
+
+eth:
+  rpc_url: ${IBCMON_ETH_RPC_URL}
+  rpc_url_2: ${IBCMON_ETH_RPC_URL_2}
+  beacon_url: ${IBCMON_BEACON_URL}
+  finality: tag          # tag (finalized) | depth:N (local anvil) | latest (tests)
+  light_client: false    # true when rpc_url is a Helios endpoint (docs/design.md §3.5)
+  # Either list the addresses, or point at gno-eth-ibc's deployment file.
+  deployment_file: ../gno-eth-ibc/contracts/deployments/local.json
+  addresses:
+    router: ""
+    transfer: ""
+    admin: ""
+    exec: ""
+    light_client: ""
+    ugnot_voucher: ""
+
+monitor:
+  poll_interval: 10s
+  deferred_alarm_failures: 6
+  client_expiry:
+    warn_before: 72h
+    critical_before: 12h
+    stale_after:
+      gno-light-client: 72h   # ADR §9: GnoLightClient, no update for 3 days
+      ethereum: 24h           # ADR §9: the gno Ethereum client, no update for 24 h
+
+alerts:
+  sinks:
+    - type: log
+    # - type: webhook
+    #   url: ${IBCMON_WEBHOOK_URL}
+    #   secret: ${IBCMON_WEBHOOK_SECRET}
+
+autoflag:
+  enabled: false         # off by default; see docs/design.md §8.4
+  dry_run: true
+
+worker:
+  enabled: false
+  docker_image: ghcr.io/foundry-rs/foundry:v1.7.1
+  gno_eth_ibc_revision: 72a41de
+  gno_eth_ibc_checkout: ../gno-eth-ibc
+  manifest: deployments/manifest.yaml
