@@ -289,7 +289,7 @@ the identity may not rest on them:
 | **`total_escrow` amounts** (per client and total) | transfer v0 `TotalEscrowForDenom` | `float64(int64)`: exact only to 2^53 (≈ 9.0 × 10^15 base units, 9 billion GNOT) | **not an identity term above 2^53**; the obligation is reconstructed from records (§7.1), or read exactly once §15 P1 lands |
 | **voucher `total_supply`**, `decimals`, voucher balances | transfer v0 `VoucherJSON`, `VoucherBalance` | `float64` | the gno voucher supply of an Ethereum-native denom is **unavailable** as an identity term above 2^53 until §15 P1 (`VoucherBalanceOf` is exact but needs the holder set) |
 | `in_flight`, `returning`, `queued_refunds`, `parked`, `proven_owed`, `unrecovered`, `unresolved` | controls `Totals` | **saturating int64 views** of wide counters (`arith.gno`): exact below 2^63, the maximum above | a value equal to the int64 maximum is carried through the model and the API as **saturated** (`saturated: [field…]`), shown as "≥ 9,223,372,036,854,775,807 (saturated)" — a lower bound, never an exact amount — and refused as an exact input by every algorithm; §7.1 reconstructs these from records |
-| `lost`, `recapitalized`, `reduced`, `accepted` | controls `Totals` | saturating lifetime statistics, "never read by a check" | dashboard only |
+| `credited`, `paid`, `fees`, `sweep_paid`, `sent`, `send_fees`, `refunded`, `lost`, `recapitalized`, `reduced`, `accepted` | controls `Totals` | saturating lifetime statistics (`statAdd`, `arith.gno`: "it saturates, and the JSON shows the maximum"), "never read by a check" | dashboard only, flagged in `saturated` like the views above. Saturation is **per source and per field**: the gno denom and route objects name the fields read at the int64 maximum; an Ethereum `uint256` is never saturated, and no display infers saturation from a value — only from the field's own flag |
 | everything else in the controls JSON | `itoa(int64)` | exact | |
 | Ethereum views | `uint256` | exact | |
 
@@ -428,7 +428,7 @@ fallback (calling a module's own address reverts `NotDelegated`). `IBCAdmin` is 
 | Read | Gives |
 |---|---|
 | `epoch() uint32`, `lastSeq() uint64`, `govClient() string`, `lastRecordTime() uint64`, `gnoChainId()`, `setupDone() bool` | the channel's Ethereum side; `silence` eligibility of the recovery is `now − max(lastRecordTime, epoch opening)` |
-| `decision(epoch, seq) Decision{hash, kind, state (0 none/1 buffered/2 pending/3 executed/4 spent/5 cancelled), bad, recordedTime, recordedBlock, params}` | the ledger, read for `seq = 1..lastSeq` and the buffer `lastSeq+1..lastSeq+64`; **`matureAt` is not stored**: `recordedTime + (kind == 2 ? 24 h : 7 d)`, or the `DecisionRecorded` event's 4th argument for a pending decision; **params are deleted once closed**: history is decoded from the delivery transaction's calldata or from `ibcgov`'s `dispatch/<e>/<seq>` body (the same bytes) |
+| `decision(epoch, seq) Decision{hash, kind, state (0 none/1 buffered/2 pending/3 executed/4 spent/5 cancelled), bad, recordedTime, recordedBlock, params}` | the ledger, read for `seq = 1..lastSeq` and the buffer `lastSeq+1..lastSeq+64`; **`matureAt` is not stored**: `recordedTime + (kind == 2 ? 24 h : 7 d)`, or the `DecisionRecorded` event's 4th argument, for a pending decision — except a **kind 8 revocation** (`grant == false`, decoded from the stored params, a non-zero account), due at `recordedTime` itself: it is pending only while an open recovery **suspends** it, and the dashboard shows "suspended by the open recovery" while `recovery.openedAt ≠ 0` and "due now" after, never a 7-day deadline; **params are deleted once closed**: history is decoded from the delivery transaction's calldata or from `ibcgov`'s `dispatch/<e>/<seq>` body (the same bytes) |
 | `isTombstoned(epoch, seq) bool`, `tombstones(epoch) uint64[2][]` | cancellations |
 | `keys() address[6]`, `flags() Flag[6]`, `hold() Flag`, `holds() Hold[]{start, end, merged}` (≤ 8, oldest merged), `conflictBlock() uint64` | `IBCAdmin`'s flags, the conflict flag, the hold history anchors use |
 | `replacementAnchor(epoch, seq) uint64` | the pinned seat-change/hand-over hold anchor; the kind 9 **flag anchor has no getter**: from `ReplacementAnchored{epoch, seq, notBefore}` |
@@ -700,13 +700,13 @@ r.Settlement = it.Action`):
 | `settlement` | then | term |
 |---|---|---|
 | 1 (refund paid or owed nothing more) | `payment: reconciled`, `refunded` is what was paid; a parked settlement refund has `payment: queued`/parked | released by `refunded`; the unpaid remainder `amount − refunded` is `unpaid_refunds` |
-| 2 (owed refund rejected), 3 (delivered) | nothing owed | settled: in the destination's supply (or released, if refunded before) |
+| 2 (owed refund rejected), 3 (delivered) | nothing owed | settled: in the destination's supply (or released, if refunded before) — the destination evidence the settlement rests on is inside the pair, or §7.2 rewinds the pair past the settlement |
 | 4 (forged refund) | the overpayment is a loss | released by `refunded`; the loss in the ledger |
 | 5 (forged receive, an inbound sequence) | — | the loss in the ledger; not a send term |
 | 0 and `outcome` pending, **no receipt** at the destination's pin for `(P.DestinationClient, s)` and the pin's timestamp before the timeout | `payment` is none | **in flight**, `amount` |
 | 0 and `outcome` pending, a receipt at or below the destination's pin whose acknowledgement is a **success** | — | settled in the **destination's supply at once** (the vouchers are minted or the escrow paid out there), even while the source's acknowledgement is unprocessed: it leaves `in_flight` the moment the receive is at or below the destination pin, since counting it there as well would count the same value twice against the backing |
 | 0 and `outcome` pending, a receipt whose acknowledgement is an **error**, or no receipt and the destination pin's timestamp at or past `timeoutTimestamp` | — | **in flight**, `amount` (nothing moved at the destination; the source refunds when it processes the ack or the timeout, and the record then classifies by the next rows) |
-| 0 and `outcome` success | — | settled in the destination's supply |
+| 0 and `outcome` success | — | settled in the destination's supply, **only once the receive it answers is at or below the destination pin**: §7.2 rewinds the source pin past any processed success whose destination evidence lies beyond the destination pin, so no pair counts a success as settled while its vouchers are not yet in the supply it reads; with the acknowledgement's proof height covered and no receipt there, a forged acknowledgement (§7.7) |
 | 0 and `outcome` error or timeout | `payment` paid or claimed: released by `refunded` (= `amount`); queued or parked: **unpaid refund** `amount − refunded`; rejected: nothing owed | |
 
 The destination state is read at the pair's own pin (§7.2): a gno-native send against the router's receipt and
@@ -784,10 +784,23 @@ Rule: "Consistent cut" (§7.11). The check selects `(G, E)`, over transfer packe
    gno.land, looked up by `(sourceClient, sequence)`) is above `G`: lower `E` to one below the lowest such receive
    block. Load every transfer receive on gno.land at or below `G` whose Ethereum send block is above `E`: lower `G`
    likewise.
-3. Repeat until neither moves. Both only decrease; the loop ends at worst at the previous evaluation's pair, or the
+3. **Processed outcomes and settlements, in the other direction.** Load every gno.land send whose acknowledgement
+   or timeout was **processed** at or below `G` (`processed_height`) and whose destination evidence lies above `E`
+   — the receive the acknowledgement answers (the `WriteAcknowledgement` log) above `E`, or, for a timeout, the
+   destination proof height the timeout transaction named (§4.1) above `E`: lower `G` to one below the lowest such
+   processing height. Load every Ethereum send whose outcome was processed (`processedBlock`) at or below `E` with
+   a gno proof height (from the acknowledgement or timeout transaction, §4.2) above `G`: lower `E` likewise. A
+   **settlement** that states a destination outcome (actions 2–4, "delivered") rewinds the same way when the
+   destination evidence it rests on lies above the other pin. A source `success` is therefore counted settled
+   (§7.1) only when the destination effect it answers is inside the pair: a lagging destination provider (a
+   receive at E100, its acknowledgement processed at G20, a finalized E90 on offer) rewinds `G` below 20 instead of
+   reading backing 100 against a supply of 0 and flagging an honest route.
+4. Repeat until neither moves. Both only decrease; the loop ends at worst at the previous evaluation's pair, or the
    route's launch heights.
-4. If a send record a receive names is **absent** at the other pin, the receive is **not yet visible** (rewind
-   past it, step 2) unless the orphan test (§7.4) is conclusive at that pin.
+5. If a send record a receive names is **absent** at the other pin, the receive is **not yet visible** (rewind
+   past it, step 2) unless the orphan test (§7.4) is conclusive at that pin. Contradiction detection is kept once
+   the evidence is covered: a processed success whose acknowledgement proof height the destination pin **does**
+   cover, with no receipt there, is a **forged acknowledgement** (§7.7), never a rewind.
 
 The pair, every rewind and its cause are part of the result (the dashboard shows "E lowered from 123 to 120:
 receive seq 41 of client-0 has its send at gno height 9001 > G").
@@ -1077,8 +1090,8 @@ decision's danger is judged by whether anything actually holds it, and for how l
 |---|---|---|---|---|
 | 2 unpause | 24 h | **never** | route object: spent while the route's pause or `refunds` hold stands; `IBCAdmin` object: spent while a hold stands, otherwise it **clears every flag set before its recording** (`Guardians.unpause`), the watch flag included, and clears conflicts earlier than its recording | a **hold** (two guardian flags), or a cancel; a lone watch flag is **no** barrier against a forged `IBCAdmin` unpause recorded after it |
 | 3 seats | 7 d | **never** (`due(…, flags = false)`) | bounded: lands at most at the hold's anchor + 21 d (`ReplacementAnchored`) | cancel, or an epoch switch (the emergency recovery); the hold only delays |
-| 8 role, revocation (zero account) | **none**: due at once | no | no | cancel before delivery, or none — shown as such |
-| 8 role, grant | 7 d | yes | yes | flag or hold, then cancel |
+| 8 role, revocation: `grant == false` with a **non-zero** account (a zero account is spent at recording, `IBCAdminExec`: `role`) | **none**: applied at recording (`DONE_NOW`) unless an emergency recovery is open, when it waits **suspended** and is **due at once** when the recovery closes (`execute`: `matureAt = recordedTime`) — suspension is a state apart from maturity | no | no | cancel before delivery; a suspended one is shown "due at once after the recovery", never with a 7-day deadline |
+| 8 role, grant (a non-zero account) | 7 d | yes | yes | flag or hold, then cancel |
 | 9 hand-over | 7 d | bounded: the flag anchor + 21 d | bounded: anchor + 21 d | cancel or epoch switch; the native path, so a foreign one is the executor compromise of M3/MG (iii) |
 | 12 settle paying a refund | 7 d | yes | yes, and the route's `refunds` hold | flag, hold, cancel |
 | 1 cancel | — | applied at **delivery** (tombstones), never executed | — | only the epoch switch |
@@ -1094,16 +1107,38 @@ flag is never taken as sufficient evidence by itself.
 the epoch and `gnoBusy()` only), and a cancel beyond the window **tombstones at delivery** (`_deliver`, prebound),
 so while the compromised verifier still accepts deliveries, a new forged cancel recorded between MG and the
 repair's execution tombstones the authenticated repair, and no later flag undoes a tombstone. The sequence is
-therefore: (1) containment; (2) **seal** the compromised ingress before MG — Ethereum-side verifier compromised:
-the guardians' **emergency recovery** (`approveRecovery` → `executeRecovery`, authenticated by `RecoveryExecuted`
-and `EpochOpened`, the new verifier authenticated per §7.6), after which the old epoch's envelopes are refused
-(`StaleEpoch`) and a delivery needs a proof the recovered verifier accepts; gno-side verifier compromised: the
-Ethereum client retired for the governance port and the epoch client replaced on gno.land (local governance,
-not through the compromised path); (3) MG for the new epoch's repair decisions, the hand-over first where the
-executor is compromised; (4) M1, M2, M3 as above. Nothing on either chain validates and executes a decision
-atomically against the then-current state, so where no seal exists — the recovery disabled (`_recoveryDelay`
-zero) or not eligible (`epoch 1` with no decision recorded), or a compromise the recovery does not reach — the
-race stands: the monitor shows it (`repair_unsealed`, `warning`) and the owner decides on §15 **S1**.
+therefore: (1) containment; (2) **seal** the compromised ingress before MG — **Ethereum-side verifier
+compromised**: the guardians' **emergency recovery** (`approveRecovery` → `executeRecovery`, authenticated by
+`RecoveryExecuted` and `EpochOpened`, the new verifier authenticated per §7.6), after which the old epoch's
+envelopes are refused (`StaleEpoch`) and a delivery needs a proof the recovered verifier accepts — the recovery
+itself runs through the installed executor's recovery module (`_delegateRecovery`, its code pinned by
+`RECOVERY_HASH`), so a compromised executor is replaced by the native kind 9 **before** the recovery is relied
+on; **gno-side verifier compromised** (a poisoned Ethereum client on gno.land, forged acknowledgements): local
+governance cannot retire the epoch client or move the epoch by itself — `NewReplaceRouteRequest` retires a client
+**for transfers only** and keeps its governance port (`ibcgov/routes.gno`: "retired for transfers (kept for
+governance)"), and `switchEpoch` retires the old governance client only when an **accepted epoch notice** passes
+it (`ibcgov/ethereum.gno`). The real sequence is: (a) the **expectation**: `NewExpectRecoveryRequest` names the
+healthy successor transition in the graph; (b) a **healthy verifier**: a new Ethereum client on gno.land whose
+consensus history authenticates (§7.6); (c) the **authentic notice**: Ethereum moves the epoch — a kind 10
+replacement, or the emergency recovery where Ethereum's side is compromised too — and its epoch notice
+(`EpochNoticeSent`) is applied over the healthy verifier (`ApplyEpochNotice` → `switchEpoch`), which retires the
+old client for governance; only then is the ingress sealed. Where a **forged notice** already moved gno.land's
+epoch (ADR §8.5 R2), gno.land has no local authenticated resynchronisation: only Ethereum's emergency recovery
+and its notice applied over a healthy verifier bring it back, so until then sealing is **unavailable** and the
+monitor says so (`seal_unavailable`); a transfer-route replacement alone never seals anything; (3) MG for the new
+epoch's repair decisions, the hand-over first where the executor is compromised; (4) M1, M2, M3 as above.
+
+**What no guard closes.** Nothing on either chain closes the window between MG and the repair's execution: a
+delivery freeze tied to the flags would end exactly when the flags must clear for an ordinary repair, so the
+attacker cancels the repair then; a guarded `execute(seq, expectedHash, expectedTombstones)` can refuse changed
+state but undo no tombstone (`execute` already refuses a tombstoned decision) and guarantees no progress; and the
+recovery depends on a trusted executor path. This is the ADR's **compromised-channel limitation** (§5.4; §8.5:
+a forged notice is undone only by the emergency recovery, R2; without the emergency path a lost channel strands
+Ethereum's backing, R10; a repair must reach `IBCAdmin` over an authenticated governance channel or a working
+recovery must restore one, R15): a repair needs an **independently authenticated path**, and giving it one is a
+protocol or deployment change to the immutable `IBCAdmin`, outside this monitor's scope and not a §15 item. The
+monitor keeps `repair_unsealed` (`warning`) raised from MG until the repair executed or the window closed, and
+never claims a guard it cannot verify.
 
 The milestones are the sink's **only** exceptions to re-assertion, each read from the chains at a header-agreed,
 finalized pin, never declared by an operator; the console shows, per open intent, the milestone it waits for
@@ -1125,8 +1160,14 @@ the collection, its pin and its verification, written atomically at the end; not
 published). The Ethereum collection discovers its own subjects on Ethereum (§4.2) and reads the gno discovery
 only for the cross-chain inputs it cannot get there (the denoms' tokens, the relationship): one **immutable**
 discovery, taken at its start, named by collection id in every Ethereum route's provenance; on start-up, when
-none exists yet, it waits for the first gno discovery within its own deadline. Readiness is tracked **per
-subject and input bundle**: an Ethereum collection whose gno dependency is missing or incomplete publishes its
+none exists yet, it waits for the first gno discovery at most `discovery_wait` (default 5 s, never its whole
+deadline) and then publishes its own subjects regardless — their alarms never wait on gno.land. A discovery is
+usable only while gno.land's **latest** collection succeeded and agreed and the discovery is that collection's:
+one left behind by a gno.land that is failing or unverified now is **stale**, and leaves the routes incomplete
+("gno discovery stale") rather than carrying a cached comparison forward. The relationship (§4.2) is
+**recomputed at evaluation** from the two selected bundles — Ethereum's route and the gno discovery — and its
+finding carries both provenances; it defers while gno.land is unavailable, the Ethereum-local checks running on.
+Readiness is tracked **per subject and input bundle**: an Ethereum collection whose gno dependency is missing or incomplete publishes its
 client and governance snapshots as fresh — they need nothing from gno.land, and their checks (a client's
 expiry, the governance watch) run — while its **route** snapshots carry what they lack (`incomplete`) and the
 checks that depend on them (the relationship, the identity) defer; the chain state says the collection is
@@ -1189,7 +1230,11 @@ counted as a failure. Neither loses the notification for good: each sink keeps a
 keys whose latest transition it has not delivered (dropped, or failed), and the manager **reconciles** it on
 every evaluation round and on a timer, re-enqueuing the alarm's **current** state (one event per key, the
 latest transition, never the whole burst) until the sink accepts it — independently of any new transition,
-since an unchanged finding produces none. While a sink's pending set is non-empty the manager raises
+since an unchanged finding produces none. Transition identities are **monotonic across reopenings**: an alarm
+raised anew after a clear starts a new **incident generation** and continues the transition count, pending
+entries are ordered by (generation, transition), and a resend carries the complete latest transition — type,
+time, eligibility and alarm together — never an older event's envelope around a newer alarm. While a sink's
+pending set is non-empty the manager raises
 `sink_backlog/<sink>` (`warning`; `critical` past `sink_backlog_critical`, default 10 min), with the drop and
 failure counts, and clears it when the set drains; a sink that refuses every delivery for `sink_failing_after`
 (default 5 min) raises `sink_failing/<sink>` (`critical`). Both are findings of a synthetic `sinks` check, so
@@ -1531,21 +1576,6 @@ end on the hold views, and the seat generations (`seatGen`, `Keys.gen`).
 serve — the current verifier's own states, the `overrides` and each retired verifier's `history` interval —
 with the generation that holds it. Without it the monitor can replay only what it observed itself, and a
 replacement that predates its discovery leaves the header record incomplete (§7.6).
-
-### Safety prerequisites
-
-Listed apart from the visibility prerequisites: each closes a race the monitor can only show. The owner decides.
-
-**S1. A guarded repair on `IBCAdmin` (gno-eth-ibc).** Deliveries are gated by nothing a flag controls and a
-prebound cancel tombstones at delivery, so between MG and the repair's execution a forged cancel through a
-still-compromised verifier can tombstone the authenticated repair (§7.10a, guarded repair sequence). The
-emergency recovery seals that path where it is enabled and eligible; where it is not, one of: (a) a **delivery
-freeze** — `onRecvPacket` reverts while a watch or guardian flag stands on `IBCAdmin`, so nothing is recorded,
-tombstoned or buffered until the guardians release it (no error ack, so the relayer resends later); or (b)
-**guarded execution** — `execute(seq, expectedHash, expectedTombstones)` that reverts unless the decision's
-hash and the epoch's tombstone set are the ones the caller validated, so a validate-and-execute pair is atomic
-for the executor that runs it. Until one lands, the design states the race and the monitor alarms
-`repair_unsealed` while it is open.
 
 ### Conveniences
 
