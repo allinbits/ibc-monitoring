@@ -6,6 +6,7 @@ package ethrpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -36,7 +37,7 @@ type Finality struct {
 // ParseFinality parses "tag", "latest" or "depth:N".
 func ParseFinality(s string) (Finality, error) {
 	switch {
-	case s == "" || s == "tag" || s == "finalized" || s == "beacon":
+	case s == "" || s == "tag" || s == "finalized":
 		return Finality{Mode: "tag"}, nil
 	case s == "latest":
 		return Finality{Mode: "latest"}, nil
@@ -46,6 +47,10 @@ func ParseFinality(s string) (Finality, error) {
 			return Finality{}, fmt.Errorf("finality %q: %w", s, err)
 		}
 		return Finality{Mode: "depth", Depth: n}, nil
+	case s == "beacon":
+		// Never mapped silently to the execution node's tag: the beacon
+		// consistency check is phase 2 (docs/design.md §3.5).
+		return Finality{}, errors.New(`finality "beacon": beacon verification is not implemented yet (phase 2); use "tag" (the execution node's finalized tag, header-agreed with the second provider)`)
 	}
 	return Finality{}, fmt.Errorf("finality %q: want tag, latest or depth:N", s)
 }
@@ -76,7 +81,9 @@ func (c *Client) Name() string { return c.name }
 // Close closes the connection.
 func (c *Client) Close() { c.rpc.Close() }
 
-// Block is the pinned block.
+// Block is the pinned block. Hash is recomputed from the full header's
+// fields (keccak of its RLP), never taken from the node's answer, so that
+// StateRoot and the other fields are bound to it (docs/design.md §3.3).
 type Block struct {
 	Number    uint64
 	Hash      common.Hash
@@ -86,22 +93,39 @@ type Block struct {
 	Finality string
 }
 
-type rawHeader struct {
-	Number    hexutil.Uint64 `json:"number"`
-	Hash      common.Hash    `json:"hash"`
-	StateRoot common.Hash    `json:"stateRoot"`
-	Timestamp hexutil.Uint64 `json:"timestamp"`
+// ErrHeaderHash is a header whose reported hash is not the hash of its fields.
+var ErrHeaderHash = errors.New("header hash does not match its fields")
+
+// reportedHash reads only the node's own hash claim, to detect a node that
+// lies about one or the other.
+type reportedHash struct {
+	Hash common.Hash `json:"hash"`
 }
 
 func (c *Client) header(ctx context.Context, tag string) (Block, error) {
-	var h *rawHeader
-	if err := c.rpc.CallContext(ctx, &h, "eth_getBlockByNumber", tag, false); err != nil {
+	var raw json.RawMessage
+	if err := c.rpc.CallContext(ctx, &raw, "eth_getBlockByNumber", tag, false); err != nil {
 		return Block{}, redactErr(fmt.Errorf("ethrpc %s: eth_getBlockByNumber %s: %w", c.name, tag, err))
 	}
-	if h == nil {
-		return Block{}, fmt.Errorf("ethrpc %s: block %s not found", c.name, tag)
+	return c.decodeHeader(raw, tag)
+}
+
+// decodeHeader decodes a full header and binds its fields to its hash.
+func (c *Client) decodeHeader(raw json.RawMessage, what string) (Block, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return Block{}, fmt.Errorf("ethrpc %s: block %s not found", c.name, what)
 	}
-	return Block{Number: uint64(h.Number), Hash: h.Hash, StateRoot: h.StateRoot, Timestamp: uint64(h.Timestamp)}, nil
+	var h types.Header
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return Block{}, fmt.Errorf("ethrpc %s: block %s: header: %w", c.name, what, err)
+	}
+	var rep reportedHash
+	_ = json.Unmarshal(raw, &rep)
+	computed := h.Hash()
+	if rep.Hash != (common.Hash{}) && rep.Hash != computed {
+		return Block{}, fmt.Errorf("ethrpc %s: block %s: %w (reported %s, computed %s)", c.name, what, ErrHeaderHash, rep.Hash, computed)
+	}
+	return Block{Number: h.Number.Uint64(), Hash: computed, StateRoot: h.Root, Timestamp: h.Time}, nil
 }
 
 // Pinned resolves the block every read of a snapshot is pinned to.
@@ -137,16 +161,21 @@ func (c *Client) BlockByNumber(ctx context.Context, n uint64) (Block, error) {
 	return c.header(ctx, hexutil.EncodeUint64(n))
 }
 
-// BlockByHash reads a block by hash (for cross-checks).
+// BlockByHash reads a block by hash (for cross-checks); the answer's fields
+// must hash to the requested hash.
 func (c *Client) BlockByHash(ctx context.Context, h common.Hash) (Block, error) {
-	var raw *rawHeader
+	var raw json.RawMessage
 	if err := c.rpc.CallContext(ctx, &raw, "eth_getBlockByHash", h, false); err != nil {
 		return Block{}, redactErr(fmt.Errorf("ethrpc %s: eth_getBlockByHash: %w", c.name, err))
 	}
-	if raw == nil {
-		return Block{}, fmt.Errorf("ethrpc %s: block %s not found", c.name, h)
+	b, err := c.decodeHeader(raw, h.Hex())
+	if err != nil {
+		return Block{}, err
 	}
-	return Block{Number: uint64(raw.Number), Hash: raw.Hash, StateRoot: raw.StateRoot, Timestamp: uint64(raw.Timestamp)}, nil
+	if b.Hash != h {
+		return Block{}, fmt.Errorf("ethrpc %s: block %s: %w (computed %s)", c.name, h, ErrHeaderHash, b.Hash)
+	}
+	return b, nil
 }
 
 // ChainID reads eth_chainId.
@@ -205,7 +234,11 @@ func (c *Client) Call(ctx context.Context, to common.Address, a *gethabi.ABI, me
 
 // Code reads the code at an address, pinned.
 func (c *Client) Code(ctx context.Context, addr common.Address, block uint64) ([]byte, error) {
-	return c.eth.CodeAt(ctx, addr, new(big.Int).SetUint64(block))
+	code, err := c.eth.CodeAt(ctx, addr, new(big.Int).SetUint64(block))
+	if err != nil {
+		return nil, redactErr(fmt.Errorf("ethrpc %s: eth_getCode: %w", c.name, err))
+	}
+	return code, nil
 }
 
 // CodeHash is keccak256 of the code at an address (what EXTCODEHASH gives for
