@@ -284,7 +284,11 @@ export interface EthDecision {
   bad: boolean;
   recorded_time: number;
   recorded_block: number;
+  /** recorded_time + the kind's delay; a kind 8 revocation is due at recorded_time itself. */
   mature_at?: number;
+  /** A kind 8 with grant == false: due at once; suspended while a recovery is open. */
+  revocation?: boolean;
+  suspended?: boolean;
   params?: string;
   tombstoned: boolean;
 }

@@ -85,8 +85,14 @@ type EthDecision struct {
 	Bad           bool   `json:"bad"`
 	RecordedTime  int64  `json:"recorded_time"`
 	RecordedBlock uint64 `json:"recorded_block"`
-	// MatureAt is recordedTime + the kind's delay (not stored on chain).
-	MatureAt   int64  `json:"mature_at,omitempty"`
+	// MatureAt is recordedTime + the kind's delay (not stored on chain); a
+	// kind 8 revocation is due at recordedTime itself.
+	MatureAt int64 `json:"mature_at,omitempty"`
+	// Revocation is a kind 8 with grant == false (a non-zero account):
+	// applied at recording unless an open recovery suspended it, and due at
+	// once when the recovery closes. Suspended says the recovery is open.
+	Revocation bool   `json:"revocation,omitempty"`
+	Suspended  bool   `json:"suspended,omitempty"`
 	Params     string `json:"params,omitempty"` // hex, while stored
 	Tombstoned bool   `json:"tombstoned"`
 }

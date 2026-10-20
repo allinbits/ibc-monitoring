@@ -178,7 +178,10 @@ func (m *Manager) Apply(_ context.Context, r model.CheckResult) {
 		seen[f.AlarmKey] = true
 		a, ok := m.store.Alarm(f.AlarmKey)
 		if !ok || a.State == model.AlarmCleared {
-			a = model.Alarm{Key: f.AlarmKey, Check: r.Check, FirstSeen: now, State: model.AlarmRaised}
+			// A new incident generation: the transition count continues,
+			// so every transition of the key stays monotonically ordered
+			// across reopenings (docs/design.md §8.2).
+			a = model.Alarm{Key: f.AlarmKey, Check: r.Check, FirstSeen: now, State: model.AlarmRaised, Generation: a.Generation + 1, Transitions: a.Transitions}
 			m.update(&a, f, now)
 			m.emit("raised", a, now)
 			continue
@@ -220,7 +223,7 @@ func (m *Manager) Reconcile(ctx context.Context) {
 	now := m.now()
 	r := model.CheckResult{Check: SinksCheck, Status: model.CheckOK, StartedAt: now, FinishedAt: now, Findings: []model.Finding{}}
 	for _, q := range m.queues {
-		q.resend(m.store)
+		q.resend()
 		pending, since, dropped, failed, failingSince := q.status()
 		if pending > 0 {
 			sev := model.SeverityWarning
@@ -310,12 +313,21 @@ func (q *queue) enqueue(e model.AlarmEvent) {
 	}
 }
 
+// later reports whether a's transition comes after b's: by generation,
+// then by transition count.
+func later(a, b model.Alarm) bool {
+	if a.Generation != b.Generation {
+		return a.Generation > b.Generation
+	}
+	return a.Transitions > b.Transitions
+}
+
 // markPending keeps e as the key's undelivered transition unless a later
 // one is pending already.
 func (q *queue) markPending(e model.AlarmEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if cur, ok := q.pending[e.Alarm.Key]; ok && cur.Alarm.Transitions > e.Alarm.Transitions {
+	if cur, ok := q.pending[e.Alarm.Key]; ok && later(cur.Alarm, e.Alarm) {
 		return
 	}
 	if len(q.pending) == 0 {
@@ -329,7 +341,7 @@ func (q *queue) markPending(e model.AlarmEvent) {
 func (q *queue) delivered(e model.AlarmEvent) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if cur, ok := q.pending[e.Alarm.Key]; ok && cur.Alarm.Transitions <= e.Alarm.Transitions {
+	if cur, ok := q.pending[e.Alarm.Key]; ok && !later(cur.Alarm, e.Alarm) {
 		delete(q.pending, e.Alarm.Key)
 	}
 	if len(q.pending) == 0 {
@@ -353,9 +365,11 @@ func (q *queue) status() (pending int, since time.Time, dropped, failed int64, f
 	return len(q.pending), q.pendingSince, q.dropped.Load(), q.failed.Load(), q.failingSince
 }
 
-// resend enqueues the current state of each pending alarm, one event per
-// key, while the queue has room.
-func (q *queue) resend(st store.Store) {
+// resend enqueues each pending transition, one event per key, while the
+// queue has room. The pending entry is the key's latest transition, kept
+// whole (type, time, eligibility and alarm together), so a sink never sees
+// an older event's envelope around a newer alarm.
+func (q *queue) resend() {
 	q.mu.Lock()
 	events := make([]model.AlarmEvent, 0, len(q.pending))
 	for _, e := range q.pending {
@@ -365,9 +379,6 @@ func (q *queue) resend(st store.Store) {
 	for _, e := range events {
 		if len(q.ch) >= cap(q.ch) {
 			return
-		}
-		if a, ok := st.Alarm(e.Alarm.Key); ok {
-			e.Alarm = a
 		}
 		select {
 		case q.ch <- e:

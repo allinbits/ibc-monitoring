@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/allinbits/ibc-monitoring/abi"
@@ -280,5 +281,48 @@ func TestRevertIsReported(t *testing.T) {
 	var rev *ethrpc.ErrRevert
 	if !asRevert(err, &rev) || rev.Reason != "no consensus state" {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// A kind 8 revocation (grant == false, a non-zero account) is due at its
+// recording time, never after seven days; a grant waits its delay (review
+// finding 7 of the eighth round).
+func TestRevocationMaturity(t *testing.T) {
+	v, b, srv := fixture(t)
+	boolT, _ := gethabi.NewType("bool", "", nil)
+	u64T, _ := gethabi.NewType("uint64", "", nil)
+	addrT, _ := gethabi.NewType("address", "", nil)
+	args := gethabi.Arguments{{Type: boolT}, {Type: u64T}, {Type: addrT}}
+	revoke, err := args.Pack(false, uint64(1), common.HexToAddress("0xabc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, _ := args.Pack(true, uint64(1), common.HexToAddress("0xabc"))
+	zero, _ := args.Pack(false, uint64(1), common.Address{})
+	srv.On(adminAddr, "decision", func(a []any) ([]any, error) {
+		switch a[1].(uint64) {
+		case 1:
+			return []any{decision{Hash: [32]byte{1}, Kind: 8, State: 2, RecordedTime: 1776500000, Params: revoke}}, nil
+		case 2:
+			return []any{decision{Hash: [32]byte{2}, Kind: 8, State: 2, RecordedTime: 1776500000, Params: grant}}, nil
+		case 3:
+			return []any{decision{Hash: [32]byte{3}, Kind: 8, State: 2, RecordedTime: 1776500000, Params: zero}}, nil
+		}
+		return []any{decision{}}, nil
+	})
+	d, err := v.Decision(context.Background(), 1, 1, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Revocation || d.MatureAt != 1776500000 {
+		t.Fatalf("revocation %+v", d)
+	}
+	d, _ = v.Decision(context.Background(), 1, 2, b)
+	if d.Revocation || d.MatureAt != 1776500000+7*86400 {
+		t.Fatalf("grant %+v", d)
+	}
+	// A zero account is spent at recording: never a revocation.
+	if d, _ = v.Decision(context.Background(), 1, 3, b); d.Revocation {
+		t.Fatalf("zero account %+v", d)
 	}
 }

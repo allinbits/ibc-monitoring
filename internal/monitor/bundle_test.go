@@ -220,4 +220,84 @@ func TestReplacementBeforeGnoProcessesItIsAMismatch(t *testing.T) {
 	if r.Status != model.CheckAlarm || len(r.Findings) != 1 || r.Findings[0].AlarmKey != "route_relationship/client-0" || r.Findings[0].Severity != model.SeverityWarning {
 		t.Fatalf("relationship check: %+v", r)
 	}
+	// Recomputed from both bundles, with both provenances.
+	if p := r.Findings[0].Provenance; len(p) != 2 || p[0].Chain != model.ChainEthereum || p[1].Chain != model.ChainGno || p[1].Collection != pins.GnoState.LastCollection {
+		t.Fatalf("provenance %+v", p)
+	}
+}
+
+// Both chains configured and gno.land failing from the start (eighth round,
+// finding 4): the Ethereum collection waits for a discovery at most
+// DiscoveryWait, then publishes its own subjects — the nearly expired
+// GnoLightClient alarms — with the route incomplete, well within its
+// deadline, and never reads the route under an expired context.
+func TestEthereumPublishesWhileGnoFails(t *testing.T) {
+	f, gsrv, gno, gno2 := gnoFixtureServer(t)
+	gsrv.Close()
+	eth, ethc, _ := ethFixture(t, f.Time.Add(-14*24*time.Hour+6*time.Hour))
+	st := store.NewMemory(10)
+	eng := &Engine{
+		Collector: &Collector{Gno: gno, Gno2: gno2, Eth: eth, Eth2: ethc, RequireCrossCheck: true, Store: st, Timeout: 10 * time.Second, DiscoveryWait: 200 * time.Millisecond},
+		Checks:    []Check{ClientExpiry{Config: DefaultClientExpiryConfig(), Chain: model.ChainEthereum}, RouteRelationship{}},
+		Store:     st,
+		Now:       func() time.Time { return f.Time },
+	}
+	start := time.Now()
+	results := eng.RunOnce(context.Background())
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("the Ethereum collection waited %s on a failing gno.land", took)
+	}
+	pins, _ := latestPins(st)
+	if pins.GnoState.OK || !pins.EthState.OK || pins.EthState.Complete || !strings.Contains(pins.EthState.Incomplete, "no gno discovery") {
+		t.Fatalf("states %+v %+v", pins.GnoState, pins.EthState)
+	}
+	for _, r := range results {
+		switch r.Check {
+		case "client_expiry/ethereum":
+			if r.Status != model.CheckAlarm || len(r.Findings) != 1 || r.Findings[0].AlarmKey != "client_expiry/ethereum/client-0" {
+				t.Fatalf("ethereum expiry: %+v", r)
+			}
+		case "route_relationship":
+			if r.Status != model.CheckSkipped {
+				t.Fatalf("relationship: %+v", r)
+			}
+		}
+	}
+	er, _ := ethRoute(t, st)
+	if len(er.Incomplete) == 0 || er.GnoDiscovery != 0 {
+		t.Fatalf("route %+v", er)
+	}
+}
+
+// A discovery a failing gno.land left behind is stale (eighth round, finding
+// 5): after a good round, gno.land goes away; the next Ethereum collection
+// leaves its route incomplete instead of carrying the cached comparison, the
+// relationship defers, and the Ethereum-local checks still run.
+func TestStaleGnoDiscoveryLeavesRoutesIncomplete(t *testing.T) {
+	f, gsrv, gno, gno2 := gnoFixtureServer(t)
+	eth, ethc, _ := ethFixture(t, f.Time.Add(-14*24*time.Hour+6*time.Hour))
+	st := store.NewMemory(10)
+	c := &Collector{Gno: gno, Gno2: gno2, Eth: eth, Eth2: ethc, RequireCrossCheck: true, Store: st, DiscoveryWait: 200 * time.Millisecond}
+	pins := c.Collect(context.Background())
+	if !pins.EthState.Complete || !pins.GnoState.OK {
+		t.Fatalf("first round %+v %+v", pins.GnoState, pins.EthState)
+	}
+	if r := (RouteRelationship{}).Run(context.Background(), st, f.Time); r.Status != model.CheckOK || len(r.Findings) != 1 || len(r.Findings[0].Provenance) != 2 {
+		t.Fatalf("relationship after a good round: %+v", r)
+	}
+	gsrv.Close()
+	pins = c.Collect(context.Background())
+	if pins.GnoState.OK || !pins.EthState.OK || pins.EthState.Complete || !strings.Contains(pins.EthState.Incomplete, "stale") {
+		t.Fatalf("second round %+v %+v", pins.GnoState, pins.EthState)
+	}
+	er, _ := ethRoute(t, st)
+	if len(er.Incomplete) == 0 || er.GnoDiscovery != 0 || er.RelationshipMismatch != "" {
+		t.Fatalf("route carried a cached comparison: %+v", er)
+	}
+	if r := (RouteRelationship{}).Run(context.Background(), st, f.Time); r.Status != model.CheckSkipped || len(r.Unevaluated) != 1 {
+		t.Fatalf("relationship on a stale discovery: %+v", r)
+	}
+	if r := (ClientExpiry{Config: DefaultClientExpiryConfig(), Chain: model.ChainEthereum}).Run(context.Background(), st, f.Time); r.Status != model.CheckAlarm {
+		t.Fatalf("ethereum expiry during the gno outage: %+v", r)
+	}
 }

@@ -188,12 +188,15 @@ type EthRoute struct {
 	// RelationshipMismatch says how it fails. GnoDiscovery is the gno
 	// collection those inputs came from (0: none); Incomplete names what the
 	// snapshot lacks without it.
-	GnoRoute             string     `json:"gno_route,omitempty"`
-	GnoCounterparty      string     `json:"gno_counterparty,omitempty"`
-	RelationshipMismatch string     `json:"relationship_mismatch,omitempty"`
-	GnoDiscovery         uint64     `json:"gno_discovery"`
-	Incomplete           []string   `json:"incomplete,omitempty"`
-	Provenance           Provenance `json:"provenance"`
+	GnoRoute             string   `json:"gno_route,omitempty"`
+	GnoCounterparty      string   `json:"gno_counterparty,omitempty"`
+	RelationshipMismatch string   `json:"relationship_mismatch,omitempty"`
+	GnoDiscovery         uint64   `json:"gno_discovery"`
+	Incomplete           []string `json:"incomplete,omitempty"`
+	// GnoProvenance is the gno discovery's provenance (nil without one):
+	// the cross-chain inputs carry their own.
+	GnoProvenance *Provenance `json:"gno_provenance,omitempty"`
+	Provenance    Provenance  `json:"provenance"`
 }
 
 // EthMigration is one GnoRouteMigrated{old, new, routeKey} of a route.

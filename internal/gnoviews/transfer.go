@@ -290,9 +290,11 @@ func parseDenom(dj denomJSON) (model.Denom, error) {
 			return d, fmt.Errorf("totals.%s: %w", k, err)
 		}
 	}
-	// The wide counters' int64 views saturate at the maximum: such a value
-	// is a lower bound and is flagged, never used as an exact amount.
-	for _, k := range []string{"in_flight", "returning", "queued_refunds", "parked", "proven_owed", "unrecovered", "unresolved", "lost", "recapitalized", "reduced", "accepted"} {
+	// The wide counters' int64 views and the statAdd statistics saturate at
+	// the maximum (arith.gno): such a value is a lower bound and is flagged
+	// per field, never used as an exact amount. Owed, withheld, swept and
+	// outstanding are checked sums, exact by construction.
+	for _, k := range []string{"in_flight", "returning", "queued_refunds", "parked", "proven_owed", "unrecovered", "unresolved", "credited", "paid", "fees", "sweep_paid", "sent", "send_fees", "refunded", "lost", "recapitalized", "reduced", "accepted"} {
 		if dj.Totals[k].String() == model.Int64Max {
 			d.Saturated = append(d.Saturated, k)
 		}

@@ -42,6 +42,10 @@ type Collector struct {
 	// collection past it is a failed collection for that chain. Zero leaves
 	// it unbounded (tests).
 	Timeout time.Duration
+	// DiscoveryWait bounds how long the Ethereum collection waits for the
+	// first gno discovery before publishing its own subjects without it
+	// (default 5 s, never its whole deadline).
+	DiscoveryWait time.Duration
 
 	mu         sync.Mutex
 	collection uint64
@@ -223,12 +227,39 @@ func (c *Collector) CollectChain(ctx context.Context, chain model.Chain) Pins {
 	published := *p
 	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: published})
 	c.mu.Unlock()
+	if chain == model.ChainGno && err == nil {
+		// The discovery is usable only once this state is published.
+		c.discoveryOnce.Do(func() { close(c.discoveryReady) })
+	}
 	if err != nil {
 		c.log().Error(string(chain)+" collection failed", "err", redact.String(err.Error()))
 	} else if incomplete != "" {
 		c.log().Warn(string(chain)+" collection incomplete", "missing", incomplete)
 	}
 	return published
+}
+
+// usableDiscovery returns the latest gno discovery when gno.land's latest
+// collection succeeded, agreed and is the one the discovery came from; a
+// discovery a failing or unverified gno.land left behind is stale and is
+// reported as such (docs/design.md §7.11).
+func (c *Collector) usableDiscovery() (GnoDiscovery, string) {
+	disc, ok := c.discovery()
+	if !ok {
+		return GnoDiscovery{}, "no gno discovery yet"
+	}
+	c.mu.Lock()
+	gs := c.gnoState
+	c.mu.Unlock()
+	switch {
+	case !gs.OK:
+		return GnoDiscovery{}, fmt.Sprintf("gno discovery %d is stale: gno.land's latest collection failed", disc.Collection)
+	case !gs.Verified:
+		return GnoDiscovery{}, fmt.Sprintf("gno discovery %d is stale: gno.land's latest collection is unverified", disc.Collection)
+	case disc.Collection != gs.LastCollection:
+		return GnoDiscovery{}, fmt.Sprintf("gno discovery %d is stale: gno.land's latest collection is %d", disc.Collection, gs.LastCollection)
+	}
+	return disc, ""
 }
 
 // discovery returns the latest gno discovery.
@@ -362,7 +393,6 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 	disc.Verified = pins.GnoVerified
 	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoDiscovery, Key: "latest", Value: disc, Provenance: model.Provenance{Chain: model.ChainGno, Height: uint64(pin.Height), Collection: collection, Verification: pins.GnoVerified}})
 	c.Store.PutSnapshots(bundle)
-	c.discoveryOnce.Do(func() { close(c.discoveryReady) })
 	return nil
 }
 
@@ -464,35 +494,54 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 		bundle = append(bundle, store.Snapshot{Kind: store.KindEthClients, Key: lc.Address, Value: lc, Provenance: lc.Provenance})
 	}
 
+	// The chain's own subjects (governance, clients) are published whatever
+	// happens to the route below: their alarms never wait on gno.land or on
+	// the route read (readiness per subject, docs/design.md §7.11).
+	partial := func(what string, err error) (string, error) {
+		c.Store.PutSnapshots(bundle)
+		return "route: " + what + ": " + redact.String(err.Error()), nil
+	}
 	// The route is discovered on Ethereum: the governance client's route
 	// key, its current client at the pin and its generations from
 	// Ethereum's own history (review finding 7). gno.land's view of it is
 	// compared separately below.
 	d, err := c.Eth.Discover(ctx, gov.GovClient, b)
 	if err != nil {
-		return "", fmt.Errorf("ethereum route of %s: %w", gov.GovClient, err)
+		return partial("discovery of "+gov.GovClient, err)
 	}
 	// One immutable gno discovery, taken now; on start-up, when none exists
-	// yet, the first gno discovery is awaited within the deadline.
-	disc, ok := c.discovery()
-	if !ok && c.Gno != nil {
+	// yet, the first gno discovery is awaited for at most DiscoveryWait,
+	// never the whole deadline.
+	if _, missing := c.usableDiscovery(); missing != "" && c.Gno != nil {
+		wait := c.DiscoveryWait
+		if wait <= 0 {
+			wait = 5 * time.Second
+		}
+		if dl, ok := ctx.Deadline(); ok {
+			if left := time.Until(dl) / 2; left < wait {
+				wait = left
+			}
+		}
 		select {
 		case <-c.discoveryReady:
-			disc, ok = c.discovery()
+		case <-time.After(wait):
 		case <-ctx.Done():
-			// Deadline while waiting: incomplete for the routes, not failed.
 		}
 	}
+	if ctx.Err() != nil {
+		return partial("read", ctx.Err())
+	}
+	disc, missing := c.usableDiscovery()
 	var incomplete []string
 	var tokens []common.Address
 	var er model.EthRoute
 	switch {
-	case !ok:
-		incomplete = append(incomplete, "no gno discovery yet: the route's tokens and gno relationship are unknown")
-	case !verified(disc.Verified):
-		incomplete = append(incomplete, fmt.Sprintf("gno discovery %d is unverified: the route's tokens and gno relationship are unknown", disc.Collection))
+	case missing != "":
+		incomplete = append(incomplete, missing+": the route's tokens and gno relationship are unknown")
 	default:
 		er.GnoDiscovery = disc.Collection
+		gp := model.Provenance{Chain: model.ChainGno, Height: uint64(disc.Pin.Height), BlockHash: disc.Pin.BlockHash, Collection: disc.Collection, Verification: disc.Verified}
+		er.GnoProvenance = &gp
 		if r, cp, found := matchGnoRoute(disc, d); found {
 			er.GnoRoute, er.GnoCounterparty = r.Key, cp
 			er.RelationshipMismatch = relationship(disc, r, cp, d)
@@ -514,9 +563,9 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	}
 	pre := er
 	if er, err = c.Eth.Route(ctx, d, tokens, b); err != nil {
-		return "", fmt.Errorf("ethereum route %s: %w", d.RouteKey, err)
+		return partial(d.RouteKey, err)
 	}
-	er.GnoDiscovery, er.GnoRoute, er.GnoCounterparty, er.RelationshipMismatch, er.Incomplete = pre.GnoDiscovery, pre.GnoRoute, pre.GnoCounterparty, pre.RelationshipMismatch, incomplete
+	er.GnoDiscovery, er.GnoProvenance, er.GnoRoute, er.GnoCounterparty, er.RelationshipMismatch, er.Incomplete = pre.GnoDiscovery, pre.GnoProvenance, pre.GnoRoute, pre.GnoCounterparty, pre.RelationshipMismatch, incomplete
 	stamp(&er.Provenance)
 	bundle = append(bundle, store.Snapshot{Kind: store.KindEthRoutes, Key: er.RouteKey, Value: er, Provenance: er.Provenance})
 	c.Store.PutSnapshots(bundle)

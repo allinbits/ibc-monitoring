@@ -134,6 +134,13 @@ func (v *Views) Governance(ctx context.Context, b ethrpc.Block) (model.EthGovern
 	if g.Recovery, err = v.Recovery(ctx, b); err != nil {
 		return g, err
 	}
+	// A pending revocation is pending only because an open recovery
+	// suspends it: a state apart from maturity (docs/design.md §7.10a).
+	for i := range g.Decisions {
+		if g.Decisions[i].Revocation && g.Decisions[i].State == 2 {
+			g.Decisions[i].Suspended = g.Recovery.OpenedAt != 0
+		}
+	}
 	return g, nil
 }
 
@@ -163,8 +170,15 @@ func (v *Views) Decision(ctx context.Context, epoch uint32, seq uint64, b ethrpc
 	}
 	if d.State == 2 { // pending: matureAt is not stored
 		delay := int64(DelayDefault)
-		if d.Kind == 2 {
+		switch {
+		case d.Kind == 2:
 			delay = DelayUnpause
+		case d.Kind == 8 && isRevocation(d.Params):
+			// A revocation is applied at recording unless an open recovery
+			// suspended it, and is due at once when the recovery closes
+			// (IBCAdmin.execute: matureAt = recordedTime).
+			md.Revocation = true
+			delay = 0
 		}
 		md.MatureAt = md.RecordedTime + delay
 	}
@@ -176,6 +190,24 @@ func (v *Views) Decision(ctx context.Context, epoch uint32, seq uint64, b ethrpc
 		md.Tombstoned = ts
 	}
 	return md, nil
+}
+
+// isRevocation decodes a kind 8's params, abi.encode(bool grant, uint64
+// roleId, address account): grant false with a non-zero account (a zero
+// account is spent at recording, IBCAdminExec: "role").
+func isRevocation(params []byte) bool {
+	if len(params) < 96 {
+		return false
+	}
+	grant := false
+	for _, b := range params[:32] {
+		grant = grant || b != 0
+	}
+	account := false
+	for _, b := range params[76:96] {
+		account = account || b != 0
+	}
+	return !grant && account
 }
 
 // Recovery reads the emergency recovery configuration and state.

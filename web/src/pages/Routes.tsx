@@ -4,9 +4,6 @@ import { decimalsOf, formatAmount, percent } from "../amount";
 import { Empty, Id, Loading, Pill, Provenance } from "../components";
 import { iso, unix } from "../time";
 
-/** The saturating counters' ceiling (int64 max): such a value is a lower bound. */
-const INT64_MAX = "9223372036854775807";
-
 function Amt({
   v,
   denom,
@@ -16,12 +13,12 @@ function Amt({
   v: string | undefined;
   denom?: string;
   decimals?: number;
-  /** True when the realm reports this field as saturated (design §4.1). */
+  /** True when the source reports this field as saturated (design §4.1); never inferred from the value. */
   saturated?: boolean;
 }) {
   if (v === undefined) return <span className="muted">—</span>;
   const d = decimals ?? (denom ? decimalsOf(denom) : 0);
-  if (saturated || v === INT64_MAX) {
+  if (saturated) {
     return (
       <span
         className="amt"
@@ -128,7 +125,7 @@ function DenomRow({ d }: { d: Denom }) {
         </div>
         <div className="muted small">
           {d.waiting} waiting · swept <Amt v={t.swept} denom={d.denom} /> · paid{" "}
-          <Amt v={t.paid} denom={d.denom} />
+          <Amt v={t.paid} denom={d.denom} saturated={d.saturated?.includes("paid")} />
         </div>
       </td>
       <td>
@@ -137,7 +134,9 @@ function DenomRow({ d }: { d: Denom }) {
           <Amt v={t.in_flight} denom={d.denom} saturated={d.saturated?.includes("in_flight")} />
         </div>
         <div className="muted small">
-          sent <Amt v={t.sent} denom={d.denom} /> · refunded <Amt v={t.refunded} denom={d.denom} />
+          sent <Amt v={t.sent} denom={d.denom} saturated={d.saturated?.includes("sent")} /> ·
+          refunded{" "}
+          <Amt v={t.refunded} denom={d.denom} saturated={d.saturated?.includes("refunded")} />
         </div>
       </td>
       <td>

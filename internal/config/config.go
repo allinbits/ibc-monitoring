@@ -90,7 +90,10 @@ type Monitor struct {
 	// (design §7.11).
 	RequestTimeout    time.Duration `yaml:"request_timeout"`
 	CollectionTimeout time.Duration `yaml:"collection_timeout"`
-	ClientExpiry      struct {
+	// DiscoveryWait bounds how long the Ethereum collection waits for the
+	// first gno discovery before publishing without it (default 5s).
+	DiscoveryWait time.Duration `yaml:"discovery_wait"`
+	ClientExpiry  struct {
 		WarnBefore     time.Duration            `yaml:"warn_before"`
 		CriticalBefore time.Duration            `yaml:"critical_before"`
 		StaleAfter     map[string]time.Duration `yaml:"stale_after"`
@@ -192,6 +195,9 @@ func (c *Config) defaults() {
 	}
 	if c.Monitor.CollectionTimeout == 0 {
 		c.Monitor.CollectionTimeout = 60 * time.Second
+	}
+	if c.Monitor.DiscoveryWait == 0 {
+		c.Monitor.DiscoveryWait = 5 * time.Second
 	}
 	if c.Monitor.DeferredAlarmFailures == 0 {
 		c.Monitor.DeferredAlarmFailures = 6

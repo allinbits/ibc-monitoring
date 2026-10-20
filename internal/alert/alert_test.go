@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -287,8 +288,10 @@ func TestBacklogReconciliation(t *testing.T) {
 	g.set(true)
 	m := NewManagerWith(st, nil, Options{Queue: 2, FailingAfter: 50 * time.Millisecond}, g)
 	t.Cleanup(func() { m.Close(time.Second) })
-	now := time.Unix(1000, 0)
-	m.now = func() time.Time { return now }
+	// The clock is read by the queue worker too: atomic.
+	var nowUnix atomic.Int64
+	nowUnix.Store(1000)
+	m.now = func() time.Time { return time.Unix(nowUnix.Load(), 0) }
 
 	var findings []model.Finding
 	for i := 0; i < 20; i++ {
@@ -300,7 +303,7 @@ func TestBacklogReconciliation(t *testing.T) {
 	if len(g.list()) != 0 {
 		t.Fatalf("delivered while refusing: %d", len(g.list()))
 	}
-	now = now.Add(time.Minute)
+	nowUnix.Add(60)
 	m.Reconcile(context.Background())
 	pending := m.Pending()[0]
 	if len(pending) == 0 || m.Dropped()[0] == 0 {
@@ -339,5 +342,58 @@ func TestBacklogReconciliation(t *testing.T) {
 	}
 	if f, _ := st.Alarm("sink_failing/gated"); f.State != model.AlarmCleared {
 		t.Fatalf("failing not cleared: %+v", f)
+	}
+}
+
+// Outage → clear → reopen → recovery: the reopened alarm's transitions are
+// ordered after the undelivered clear (incident generation 2), the resend
+// carries the complete latest transition, and the backlog drains (review
+// finding 6 of the eighth round).
+func TestReopenAcrossBacklog(t *testing.T) {
+	st := store.NewMemory(10)
+	g := &gated{}
+	g.set(true)
+	m := NewManagerWith(st, nil, Options{Queue: 2}, g)
+	t.Cleanup(func() { m.Close(time.Second) })
+	var nowUnix atomic.Int64
+	nowUnix.Store(1000)
+	m.now = func() time.Time { return time.Unix(nowUnix.Load(), 0) }
+	f := model.Finding{Subject: "x", Severity: model.SeverityWarning, Title: "x warns", AlarmKey: "c/x"}
+	m.Apply(context.Background(), result(f)) // raised, generation 1, transition 1
+	nowUnix.Add(60)
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK}) // cleared, transition 2
+	nowUnix.Add(60)
+	m.Apply(context.Background(), result(f)) // raised anew: generation 2, transition 3
+	time.Sleep(50 * time.Millisecond)
+	a, _ := st.Alarm("c/x")
+	if a.Generation != 2 || a.Transitions != 3 || a.State != model.AlarmRaised {
+		t.Fatalf("reopened alarm %+v", a)
+	}
+	m.Reconcile(context.Background())
+	if p := m.Pending()[0]; len(p) != 1 {
+		t.Fatalf("pending %v", p)
+	}
+	g.set(false)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(m.Pending()[0]) != 0 && time.Now().Before(deadline) {
+		m.Reconcile(context.Background())
+		time.Sleep(20 * time.Millisecond)
+	}
+	if p := m.Pending()[0]; len(p) != 0 {
+		t.Fatalf("backlog did not drain: %v", p)
+	}
+	events := g.list()
+	var last *model.AlarmEvent
+	for i := range events {
+		if events[i].Alarm.Key == "c/x" {
+			last = &events[i]
+		}
+	}
+	if last == nil || last.Type != "raised" || last.Alarm.State != model.AlarmRaised || last.Alarm.Generation != 2 || last.Alarm.Transitions != 3 || !last.At.Equal(time.Unix(1000, 0).Add(2*time.Minute)) {
+		t.Fatalf("last delivered event %+v", last)
+	}
+	m.Reconcile(context.Background())
+	if b, _ := st.Alarm("sink_backlog/gated"); b.State != model.AlarmCleared {
+		t.Fatalf("backlog alarm %+v", b)
 	}
 }

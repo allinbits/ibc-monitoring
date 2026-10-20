@@ -82,7 +82,11 @@ type Alarm struct {
 	Detail    string     `json:"detail,omitempty"`
 	Evidence  Finding    `json:"evidence"`
 	AutoFlag  bool       `json:"autoflag"`
-	// Transitions counts raise/update/clear events sent to the sinks.
+	// Generation is the incident generation: 1 for the first raise, one
+	// more each time the alarm is raised anew after a clear. Transitions
+	// counts raise/update/clear events across generations, so (generation,
+	// transitions) orders every transition of a key monotonically.
+	Generation  int `json:"generation"`
 	Transitions int `json:"transitions"`
 }
 

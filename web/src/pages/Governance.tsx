@@ -307,6 +307,12 @@ function EthSide({ e }: { e: EthGovernance }) {
                     <>
                       {unix(d.mature_at)}
                       <div className="muted small">{countdown(new Date(d.mature_at * 1000))}</div>
+                      {d.suspended && (
+                        <Pill kind="warn">
+                          suspended by the open recovery; due at once after it closes
+                        </Pill>
+                      )}
+                      {d.revocation && !d.suspended && <Pill kind="bad">revocation: due now</Pill>}
                     </>
                   ) : (
                     "—"
