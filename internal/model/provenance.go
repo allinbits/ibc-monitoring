@@ -50,6 +50,9 @@ type Provenance struct {
 	// Collection is the collector run this value came from; the API marks a
 	// snapshot older than the latest collection of its chain as stale.
 	Collection uint64 `json:"collection,omitempty"`
+	// Stale is set by the API when the value is not from its chain's latest
+	// successful, header-agreed collection.
+	Stale bool `json:"stale"`
 }
 
 // StateVerification levels.

@@ -208,7 +208,7 @@ func TestEngineEndToEnd(t *testing.T) {
 	if p.GnoError != "" || p.EthError != "" {
 		t.Fatalf("collection errors: %s / %s", p.GnoError, p.EthError)
 	}
-	if p.GnoVerified != model.VerificationCrossChecked || p.EthVerified != model.VerificationCrossChecked {
+	if p.GnoVerified != model.VerificationCrossChecked || p.EthVerified != model.VerificationCrossChecked || !p.GnoState.Verified || !p.EthState.Verified {
 		t.Fatalf("verification %s / %s (%s / %s)", p.GnoVerified, p.EthVerified, p.GnoCrossCheck, p.EthCrossCheck)
 	}
 	if len(st.Snapshots(store.KindGnoClients)) != 2 || len(st.Snapshots(store.KindEthClients)) != 1 || len(st.Snapshots(store.KindEthRoutes)) != 1 {

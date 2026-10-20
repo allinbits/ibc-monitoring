@@ -23,9 +23,14 @@ type StorageProof struct {
 	Proof []string
 }
 
+// ErrProofMismatch is a proof that does not answer what was asked: another
+// account, or a slot set that is not the requested one.
+var ErrProofMismatch = errors.New("proof does not correspond to the request")
+
 // AccountProof is an eth_getProof answer kept whole: the account proof is
 // what binds the storage root to the header's state root, and the storage
-// proofs bind each value to that storage root (docs/design.md §3.3).
+// proofs bind each value to that storage root (docs/design.md §3.3). It is
+// accepted only when it answers exactly the requested account and slots.
 type AccountProof struct {
 	Address      common.Address
 	AccountProof []string
@@ -47,9 +52,33 @@ func (c *Client) Proof(ctx context.Context, addr common.Address, slots []common.
 	if err != nil {
 		return AccountProof{}, redactErr(fmt.Errorf("ethrpc %s: eth_getProof: %w", c.name, err))
 	}
-	out := AccountProof{Address: res.Address, AccountProof: res.AccountProof, Balance: res.Balance, CodeHash: res.CodeHash, Nonce: res.Nonce, StorageHash: res.StorageHash}
+	// The answer must be about the requested account and exactly the
+	// requested slots: a valid proof of some other account's absence proves
+	// nothing about the bridge contract.
+	if res.Address != addr {
+		return AccountProof{}, fmt.Errorf("%w: asked %s, answered %s", ErrProofMismatch, addr, res.Address)
+	}
+	out := AccountProof{Address: addr, AccountProof: res.AccountProof, Balance: res.Balance, CodeHash: res.CodeHash, Nonce: res.Nonce, StorageHash: res.StorageHash}
+	wanted := make(map[common.Hash]bool, len(slots))
+	for _, s := range slots {
+		wanted[s] = true
+	}
+	seen := make(map[common.Hash]bool, len(slots))
 	for _, sp := range res.StorageProof {
-		out.Storage = append(out.Storage, StorageProof{Key: common.HexToHash(sp.Key), Value: sp.Value, Proof: sp.Proof})
+		k := common.HexToHash(sp.Key)
+		if !wanted[k] {
+			return AccountProof{}, fmt.Errorf("%w: slot %s was not requested", ErrProofMismatch, k)
+		}
+		if seen[k] {
+			return AccountProof{}, fmt.Errorf("%w: slot %s answered twice", ErrProofMismatch, k)
+		}
+		seen[k] = true
+		out.Storage = append(out.Storage, StorageProof{Key: k, Value: sp.Value, Proof: sp.Proof})
+	}
+	for _, s := range slots {
+		if !seen[s] {
+			return AccountProof{}, fmt.Errorf("%w: slot %s missing from the answer", ErrProofMismatch, s)
+		}
 	}
 	return out, nil
 }

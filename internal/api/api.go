@@ -116,18 +116,59 @@ func (s *Server) overview(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, o)
 }
 
-func values(snaps []store.Snapshot) []any {
+// freshness answers whether a snapshot of a chain is from that chain's
+// latest successful, header-agreed collection (docs/design.md §7.11); the
+// collector stores the rule in the pins snapshot under this interface.
+type freshness interface {
+	Fresh(chain model.Chain, prov model.Provenance) bool
+}
+
+func (s *Server) fresh() freshness {
+	pins, ok := s.Store.Snapshot(store.KindPins, "latest")
+	if !ok {
+		return nil
+	}
+	f, _ := pins.Value.(freshness)
+	return f
+}
+
+// mark returns the snapshot's value with its provenance's Stale flag set
+// when it is not fresh. Values are copied; the store is untouched.
+func (s *Server) mark(sn store.Snapshot) any {
+	f := s.fresh()
+	stale := f == nil || !f.Fresh(sn.Provenance.Chain, sn.Provenance)
+	switch v := sn.Value.(type) {
+	case model.Client:
+		v.Provenance.Stale = stale
+		return v
+	case model.Route:
+		v.Provenance.Stale = stale
+		return v
+	case model.EthRoute:
+		v.Provenance.Stale = stale
+		return v
+	case model.GnoGovernance:
+		v.Provenance.Stale = stale
+		return v
+	case model.EthGovernance:
+		v.Provenance.Stale = stale
+		return v
+	}
+	return sn.Value
+}
+
+func (s *Server) values(snaps []store.Snapshot) []any {
 	out := make([]any, 0, len(snaps))
 	for _, sn := range snaps {
-		out = append(out, sn.Value)
+		out = append(out, s.mark(sn))
 	}
 	return out
 }
 
 func (s *Server) clients(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, map[string]any{
-		"gno":      values(s.Store.Snapshots(store.KindGnoClients)),
-		"ethereum": values(s.Store.Snapshots(store.KindEthClients)),
+		"gno":      s.values(s.Store.Snapshots(store.KindGnoClients)),
+		"ethereum": s.values(s.Store.Snapshots(store.KindEthClients)),
 	})
 }
 
@@ -141,9 +182,9 @@ type RouteView struct {
 func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 	var out []RouteView
 	for _, sn := range s.Store.Snapshots(store.KindGnoRoutes) {
-		rv := RouteView{Key: sn.Key, Gno: sn.Value}
+		rv := RouteView{Key: sn.Key, Gno: s.mark(sn)}
 		if es, ok := s.Store.Snapshot(store.KindEthRoutes, sn.Key); ok {
-			rv.Ethereum = es.Value
+			rv.Ethereum = s.mark(es)
 		}
 		out = append(out, rv)
 	}
@@ -154,9 +195,16 @@ func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) governance(w http.ResponseWriter, _ *http.Request) {
-	g, _ := s.Store.Snapshot(store.KindGnoGovernance, "ibcgov")
-	e, _ := s.Store.Snapshot(store.KindEthGovernance, "ibcadmin")
-	s.writeJSON(w, map[string]any{"gno": g.Value, "ethereum": e.Value})
+	g, gok := s.Store.Snapshot(store.KindGnoGovernance, "ibcgov")
+	e, eok := s.Store.Snapshot(store.KindEthGovernance, "ibcadmin")
+	out := map[string]any{"gno": nil, "ethereum": nil}
+	if gok {
+		out["gno"] = s.mark(g)
+	}
+	if eok {
+		out["ethereum"] = s.mark(e)
+	}
+	s.writeJSON(w, out)
 }
 
 func (s *Server) checks(w http.ResponseWriter, _ *http.Request) {
@@ -187,6 +235,10 @@ func (s *Server) alarmEvents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jobs(w http.ResponseWriter, _ *http.Request) {
 	if s.Jobs == nil {
 		s.writeJSON(w, []any{})
+		return
+	}
+	if s.Info.Public {
+		s.writeJSON(w, publicJobs(s.Jobs()))
 		return
 	}
 	s.writeJSON(w, s.Jobs())

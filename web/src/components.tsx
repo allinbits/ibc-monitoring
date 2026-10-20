@@ -7,13 +7,14 @@ export function Provenance({ p }: { p: Prov | undefined }) {
   const unverified = p.verification === "unverified";
   const chain = p.chain === "gno" ? "gno.land" : "Ethereum";
   const at = p.chain === "gno" ? `height ${p.height}` : `block ${p.height}`;
+  const weak = unverified || p.stale;
   return (
     <span
-      className={`prov ${unverified ? "prov-unverified" : ""}`}
-      title={`${chain} ${at}${p.block_hash ? ` ${p.block_hash}` : ""}\nread ${iso(p.read_at)} via ${p.node}\n${p.verification}${p.finality ? `, ${p.finality}` : ""}`}
+      className={`prov ${weak ? "prov-unverified" : ""}`}
+      title={`${chain} ${at}${p.block_hash ? ` ${p.block_hash}` : ""}\nread ${iso(p.read_at)} via ${p.node}\nheader: ${p.verification}${p.finality ? `, ${p.finality}` : ""}\nvalue: ${p.state_verification ?? "none"}${p.stale ? "\nstale: not from the latest header-agreed collection" : ""}`}
     >
-      {chain} @ {p.height} · {p.verification}
-      {unverified ? " · unverified" : ""}
+      {chain} @ {p.height} · {p.verification} · value {p.state_verification ?? "none"}
+      {p.stale ? " · stale" : ""}
     </span>
   );
 }

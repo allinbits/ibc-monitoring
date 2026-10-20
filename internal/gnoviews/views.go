@@ -47,15 +47,45 @@ func New(rpc *gnorpc.Client, paths Paths) *Views {
 	return &Views{rpc: rpc, paths: paths, now: time.Now}
 }
 
-// Pin is a height every read of one snapshot is pinned to.
+// Pin is a height every read of one snapshot is pinned to, with the header
+// fields the cross-check compares one by one (docs/design.md §3.3): a block
+// hash alone binds nothing a node could lie about beside it.
 type Pin struct {
-	Height    int64
-	BlockHash string
-	Time      time.Time
+	Height             int64
+	BlockHash          string
+	Time               time.Time
+	ChainID            string
+	AppHash            string
+	ValidatorsHash     string
+	NextValidatorsHash string
 }
 
-// LatestPin reads the node's latest committed height and its hash. A node
-// that is catching up is refused as a primary.
+// Agrees reports whether two pins of the same height agree on every
+// security-critical header field, and names the first that differs.
+func (p Pin) Agrees(o Pin) (bool, string) {
+	fields := []struct{ name, a, b string }{
+		{"block hash", p.BlockHash, o.BlockHash},
+		{"chain id", p.ChainID, o.ChainID},
+		{"app hash", p.AppHash, o.AppHash},
+		{"validators hash", p.ValidatorsHash, o.ValidatorsHash},
+		{"next validators hash", p.NextValidatorsHash, o.NextValidatorsHash},
+	}
+	if p.Height != o.Height {
+		return false, fmt.Sprintf("height %d vs %d", p.Height, o.Height)
+	}
+	if !p.Time.Equal(o.Time) {
+		return false, fmt.Sprintf("time %s vs %s", p.Time.UTC().Format(time.RFC3339Nano), o.Time.UTC().Format(time.RFC3339Nano))
+	}
+	for _, f := range fields {
+		if !strings.EqualFold(f.a, f.b) {
+			return false, fmt.Sprintf("%s %s vs %s", f.name, f.a, f.b)
+		}
+	}
+	return true, ""
+}
+
+// LatestPin reads the node's latest committed height and the header of that
+// block. A node that is catching up is refused as a primary.
 func (v *Views) LatestPin(ctx context.Context) (Pin, error) {
 	st, err := v.rpc.Status(ctx)
 	if err != nil {
@@ -64,16 +94,23 @@ func (v *Views) LatestPin(ctx context.Context) (Pin, error) {
 	if st.CatchingUp {
 		return Pin{}, fmt.Errorf("node %s is catching up", v.rpc.Name())
 	}
-	return Pin{Height: st.LatestBlockHeight, BlockHash: st.LatestBlockHash, Time: st.LatestBlockTime}, nil
+	pin, err := v.PinAt(ctx, st.LatestBlockHeight)
+	if err != nil {
+		return Pin{}, err
+	}
+	if !strings.EqualFold(pin.BlockHash, st.LatestBlockHash) {
+		return Pin{}, fmt.Errorf("node %s: status hash %s differs from block %d's %s", v.rpc.Name(), st.LatestBlockHash, st.LatestBlockHeight, pin.BlockHash)
+	}
+	return pin, nil
 }
 
-// PinAt reads the hash of a given height (for cross-checks).
+// PinAt reads the header of a given height (for cross-checks).
 func (v *Views) PinAt(ctx context.Context, height int64) (Pin, error) {
 	h, err := v.rpc.Block(ctx, height)
 	if err != nil {
 		return Pin{}, err
 	}
-	return Pin{Height: h.Height, BlockHash: h.Hash, Time: h.Time}, nil
+	return Pin{Height: h.Height, BlockHash: h.Hash, Time: h.Time, ChainID: h.ChainID, AppHash: h.AppHash, ValidatorsHash: h.ValidatorsHash, NextValidatorsHash: h.NextValidatorsHash}, nil
 }
 
 func (v *Views) provenance(p Pin) model.Provenance {

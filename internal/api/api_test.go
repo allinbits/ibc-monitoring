@@ -21,7 +21,10 @@ func TestAPI(t *testing.T) {
 	st.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: r.Key, Value: model.EthRoute{RouteKey: "client-0"}})
 	st.PutResult(model.CheckResult{Check: "client_expiry", Status: model.CheckOK, Findings: []model.Finding{}})
 	st.PutAlarm(model.Alarm{Key: "a", State: model.AlarmRaised, Title: "<script>alert(1)</script>", Detail: "node own-gno-node said connection refused"})
-	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now(), GnoNode: "own-gno-node", EthNode: "own-eth-node"}}).Handler())
+	jobs := func() any {
+		return []map[string]any{{"id": 1, "kind": "codehash", "subject": "decision 1/7", "status": "passed", "verdict": "matched via https://rpc.example/v3/TOKENTOKENTOKENTOKEN", "log": "Post \"http://127.0.0.1:1\"", "checks": []any{map[string]any{"name": "n", "note": "secret-ish"}}}}
+	}
+	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now(), GnoNode: "own-gno-node", EthNode: "own-eth-node"}, Jobs: jobs}).Handler())
 	defer srv.Close()
 
 	get := func(path string) (int, string) {
@@ -81,6 +84,7 @@ func TestAPI(t *testing.T) {
 	}
 	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: map[string]any{
 		"gno_error":       `Post "http://127.0.0.1:1": connection refused`,
+		"big_id":          uint64(9007199254740993),
 		"gno_cross_check": "second provider unavailable: dial tcp 10.0.0.9:26657",
 		"gno_state":       map[string]any{"ok": false, "error": "secret-ish text", "consecutive_failures": 3},
 	}})
@@ -89,7 +93,7 @@ func TestAPI(t *testing.T) {
 		if code != 200 {
 			t.Fatalf("%s: %d", path, code)
 		}
-		for _, leak := range []string{"127.0.0.1", "connection refused", "secret-ish", "10.0.0.9", "own-gno-node", "consecutive_failures"} {
+		for _, leak := range []string{"127.0.0.1", "connection refused", "secret-ish", "10.0.0.9", "own-gno-node", "consecutive_failures", "TOKENTOKEN"} {
 			if strings.Contains(body, leak) {
 				t.Fatalf("%s leaks %q: %s", path, leak, body)
 			}
@@ -103,9 +107,14 @@ func TestAPI(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "degraded") {
 		t.Fatalf("health %d %s", code, body)
 	}
+	// The public filter never passes a number through a float64.
+	_, body = get("/api/v1/overview")
+	if !strings.Contains(body, "9007199254740993") {
+		t.Fatalf("precision lost in the public filter: %s", body)
+	}
 	code, body = get("/api/v1/worker/jobs")
-	if code != 200 || strings.TrimSpace(body) != "[]" {
-		t.Fatalf("jobs %d %s", code, body)
+	if code != 200 || !strings.Contains(body, `"passed":true`) || strings.Contains(body, "verdict") || strings.Contains(body, "TOKEN") || strings.Contains(body, "checks") {
+		t.Fatalf("public jobs %d %s", code, body)
 	}
 	code, _ = get("/api/v1/nope")
 	if code != 404 {

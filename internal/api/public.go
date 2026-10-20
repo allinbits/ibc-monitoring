@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // Public mode filters every response centrally (docs/design.md §10.2): the
@@ -24,22 +26,62 @@ var publicReplacements = map[string]any{
 	"eth_cross_check":      "",
 	"reason":               "",
 	"log":                  "",
+	"verdict":              "",
 	"detail":               "",
 	"values":               nil,
 	"consecutive_failures": nil,
 }
 
-// publicFilter rewrites v for a public instance.
+// publicFilter rewrites v for a public instance. Numbers are decoded as
+// tokens (UseNumber), so no identifier passes through a float64.
 func publicFilter(v any) any {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return v
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
 	var generic any
-	if err := json.Unmarshal(b, &generic); err != nil {
+	if err := dec.Decode(&generic); err != nil {
 		return v
 	}
 	return filterValue(generic)
+}
+
+// PublicJob is the explicit schema a public instance serves for a worker
+// job: identity and verdict class only, never the texts (design §10.2).
+type PublicJob struct {
+	ID         int       `json:"id"`
+	Kind       string    `json:"kind"`
+	Subject    string    `json:"subject"`
+	Status     string    `json:"status"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
+	Passed     bool      `json:"passed"`
+}
+
+// publicJobs projects the worker's jobs onto PublicJob, whatever their type.
+func publicJobs(v any) []PublicJob {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []PublicJob{}
+	}
+	var raw []struct {
+		ID         int       `json:"id"`
+		Kind       string    `json:"kind"`
+		Subject    string    `json:"subject"`
+		Status     string    `json:"status"`
+		StartedAt  time.Time `json:"started_at"`
+		FinishedAt time.Time `json:"finished_at"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return []PublicJob{}
+	}
+	out := make([]PublicJob, 0, len(raw))
+	for _, j := range raw {
+		out = append(out, PublicJob{ID: j.ID, Kind: j.Kind, Subject: j.Subject, Status: j.Status, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt, Passed: j.Status == "passed"})
+	}
+	return out
 }
 
 func filterValue(v any) any {

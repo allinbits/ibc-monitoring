@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -46,13 +45,18 @@ type Collector struct {
 type ChainState struct {
 	// OK is true when the latest collection read the chain without error.
 	OK bool `json:"ok"`
+	// Verified is true when the latest collection's header was agreed (or
+	// light-client verified); an unverified collection is not fresh.
+	Verified bool `json:"verified"`
 	// Error is the latest collection's error, redacted ("" when OK).
 	Error string `json:"error,omitempty"`
-	// ConsecutiveFailures counts collections that failed in a row.
-	ConsecutiveFailures int       `json:"consecutive_failures"`
-	LastSuccess         time.Time `json:"last_success,omitempty"`
-	// LastCollection is the collection id of the latest successful read;
-	// snapshots carrying an older id are stale.
+	// ConsecutiveFailures counts collections that failed in a row;
+	// ConsecutiveUnverified counts collections whose header did not agree.
+	ConsecutiveFailures   int       `json:"consecutive_failures"`
+	ConsecutiveUnverified int       `json:"consecutive_unverified"`
+	LastSuccess           time.Time `json:"last_success,omitempty"`
+	// LastCollection is the collection id of the latest successful,
+	// header-agreed read; snapshots carrying another id are stale.
 	LastCollection uint64 `json:"last_collection"`
 }
 
@@ -74,15 +78,18 @@ type Pins struct {
 }
 
 // Fresh reports whether a snapshot of chain is from that chain's latest
-// successful collection.
+// successful, header-agreed collection.
 func (p Pins) Fresh(chain model.Chain, prov model.Provenance) bool {
-	switch chain {
-	case model.ChainGno:
-		return p.GnoState.OK && prov.Collection == p.GnoState.LastCollection
-	case model.ChainEthereum:
-		return p.EthState.OK && prov.Collection == p.EthState.LastCollection
+	st := p.State(chain)
+	return st.OK && st.Verified && prov.Collection == st.LastCollection
+}
+
+// State returns one chain's state.
+func (p Pins) State(chain model.Chain) ChainState {
+	if chain == model.ChainEthereum {
+		return p.EthState
 	}
-	return false
+	return p.GnoState
 }
 
 // Collect reads every view once. A failure on one chain does not prevent the
@@ -92,7 +99,7 @@ func (c *Collector) Collect(ctx context.Context) Pins {
 	pins := Pins{Collection: c.collection, CollectedAt: time.Now()}
 	if c.Gno != nil {
 		err := c.collectGno(ctx, &pins)
-		c.gnoState = c.gnoState.update(err, c.collection, pins.CollectedAt)
+		c.gnoState = c.gnoState.update(err, verified(pins.GnoVerified), c.collection, pins.CollectedAt)
 		if err != nil {
 			c.log().Error("gno collection failed", "err", c.gnoState.Error)
 		}
@@ -101,7 +108,7 @@ func (c *Collector) Collect(ctx context.Context) Pins {
 	pins.GnoError = c.gnoState.Error
 	if c.Eth != nil {
 		err := c.collectEth(ctx, &pins)
-		c.ethState = c.ethState.update(err, c.collection, pins.CollectedAt)
+		c.ethState = c.ethState.update(err, verified(pins.EthVerified), c.collection, pins.CollectedAt)
 		if err != nil {
 			c.log().Error("ethereum collection failed", "err", c.ethState.Error)
 		}
@@ -112,14 +119,28 @@ func (c *Collector) Collect(ctx context.Context) Pins {
 	return pins
 }
 
-func (s ChainState) update(err error, collection uint64, at time.Time) ChainState {
+func verified(v model.Verification) bool {
+	return v == model.VerificationCrossChecked || v == model.VerificationLightClient
+}
+
+func (s ChainState) update(err error, verified bool, collection uint64, at time.Time) ChainState {
 	if err != nil {
 		s.OK = false
+		s.Verified = false
 		s.Error = redact.String(err.Error())
 		s.ConsecutiveFailures++
 		return s
 	}
-	return ChainState{OK: true, LastSuccess: at, LastCollection: collection}
+	if !verified {
+		// Read, but the header did not agree: the snapshots are not fresh.
+		s.OK = true
+		s.Verified = false
+		s.Error = ""
+		s.ConsecutiveFailures = 0
+		s.ConsecutiveUnverified++
+		return s
+	}
+	return ChainState{OK: true, Verified: true, LastSuccess: at, LastCollection: collection}
 }
 
 func (c *Collector) log() *slog.Logger {
@@ -160,9 +181,12 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 		var other gnoviews.Pin
 		other, otherErr = c.Gno2.PinAt(ctx, pin.Height)
 		if otherErr == nil {
-			agree = strings.EqualFold(other.BlockHash, pin.BlockHash)
+			// Every security-critical header field is compared, not only the
+			// hash (docs/design.md §3.3).
+			var diff string
+			agree, diff = pin.Agrees(other)
 			if !agree {
-				mismatch = fmt.Sprintf("hash mismatch at %d: %s vs %s", pin.Height, pin.BlockHash, other.BlockHash)
+				mismatch = fmt.Sprintf("header mismatch at %d: %s", pin.Height, diff)
 			}
 		}
 	}

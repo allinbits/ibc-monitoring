@@ -12,7 +12,15 @@ export interface Provenance {
   read_at: string;
   verification: "provider" | "cross-checked" | "light-client" | "unverified";
   finality?: string;
+  /** Whether the value itself was authenticated against the header (design §3.3). */
+  state_verification: "none" | "agreed" | "proof";
+  collection?: number;
+  /** Not from the chain's latest successful, header-agreed collection. */
+  stale: boolean;
 }
+
+/** A uint64 identifier (sequence, decision number): a decimal string, never a Number. */
+export type Seq = string;
 
 export interface Client {
   chain: Chain;
@@ -204,7 +212,7 @@ export interface GnoFlag {
 }
 
 export interface GnoDecision {
-  id: number;
+  id: Seq;
   kind: string;
   text: string;
   state: "pending" | "applied" | "cancelled" | "spent";
@@ -218,14 +226,14 @@ export interface GnoDecision {
 
 export interface GnoDispatch {
   epoch: number;
-  seq: number;
+  seq: Seq;
   kind: number;
-  decision: number;
+  decision: Seq;
   body: string;
   status: number;
   redispatch: boolean;
   in_flight: boolean;
-  transport: number;
+  transport: Seq;
   sends: number;
   event: string;
 }
@@ -239,7 +247,7 @@ export interface GnoGovernance {
   flags: GnoFlag[];
   epoch: number;
   epoch_client: string;
-  last_seq: number;
+  last_seq: Seq;
   decisions: GnoDecision[];
   dispatches: GnoDispatch[];
   provenance: Provenance;
@@ -247,7 +255,7 @@ export interface GnoGovernance {
 
 export interface EthDecision {
   epoch: number;
-  seq: number;
+  seq: Seq;
   hash: string;
   kind: number;
   state: number;
@@ -276,7 +284,7 @@ export interface EthRecovery {
 
 export interface EthGovernance {
   epoch: number;
-  last_seq: number;
+  last_seq: Seq;
   gov_client: string;
   gno_chain_id: string;
   last_record_time: number;
@@ -289,7 +297,7 @@ export interface EthGovernance {
   exec: string;
   exec_code_hash: string;
   decisions: EthDecision[];
-  buffered: number[];
+  buffered: Seq[];
   recovery: EthRecovery;
   provenance: Provenance;
 }
@@ -344,8 +352,10 @@ export interface Info {
 
 export interface ChainState {
   ok: boolean;
+  verified: boolean;
   error?: string;
   consecutive_failures?: number;
+  consecutive_unverified?: number;
   last_success?: string;
   last_collection: number;
 }

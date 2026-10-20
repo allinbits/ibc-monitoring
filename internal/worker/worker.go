@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 	"github.com/allinbits/ibc-monitoring/internal/ethrpc"
 	"github.com/allinbits/ibc-monitoring/internal/model"
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 )
 
 // JobKind names a job.
@@ -73,7 +75,20 @@ func (w *Worker) Jobs() any {
 	return out
 }
 
+// sanitize redacts every text a job stores (docs/design.md §10.2).
+func sanitize(j *Job) {
+	j.Subject = redact.String(j.Subject)
+	j.Verdict = redact.String(j.Verdict)
+	j.Log = redact.String(j.Log)
+	for i := range j.Checks {
+		j.Checks[i].Note = redact.String(j.Checks[i].Note)
+		j.Checks[i].Expected = redact.String(j.Checks[i].Expected)
+		j.Checks[i].Actual = redact.String(j.Checks[i].Actual)
+	}
+}
+
 func (w *Worker) add(j Job) Job {
+	sanitize(&j)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.next++
@@ -83,6 +98,7 @@ func (w *Worker) add(j Job) Job {
 }
 
 func (w *Worker) update(j Job) {
+	sanitize(&j)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for i := range w.jobs {
@@ -110,7 +126,7 @@ func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block uint64, p
 	j := w.add(Job{Kind: JobCodeHash, Subject: t.Subject, Status: "running", StartedAt: time.Now(), Checks: []JobCheck{}, Provenance: &prov})
 	hash, size, err := w.Eth.CodeHash(ctx, t.Address, block)
 	if err != nil {
-		j.Status, j.Verdict, j.FinishedAt = "error", err.Error(), time.Now()
+		j.Status, j.Verdict, j.FinishedAt = "error", redact.String(err.Error()), time.Now()
 		w.update(j)
 		return j
 	}
@@ -152,10 +168,16 @@ func (w *Worker) CodeHash(ctx context.Context, t CodeHashTarget, block uint64, p
 // scripts/verify-codehashes.sh of gno-eth-ibc at the named revision inside the
 // Foundry image with CANDIDATES_ONLY or COMPONENTS (docs/design.md §9.1, §9.3).
 // TODO(phase 5): implement the Docker runner; today it records an
-// "unsupported" job that says what it would run.
+// "unsupported" job that says what it would run. A job never records the
+// environment's values (ETH_RPC_URL carries credentials), only the names.
 func (w *Worker) BuildVerify(_ context.Context, subject, revision string, env map[string]string) Job {
+	names := make([]string, 0, len(env))
+	for k := range env {
+		names = append(names, k)
+	}
+	sort.Strings(names)
 	j := w.add(Job{Kind: JobBuildVerify, Subject: subject, Status: "unsupported", StartedAt: time.Now(), FinishedAt: time.Now(), Checks: []JobCheck{}})
-	j.Verdict = fmt.Sprintf("not implemented: would run verify-codehashes.sh from gno-eth-ibc@%s in Docker with %v", revision, env)
+	j.Verdict = fmt.Sprintf("not implemented: would run verify-codehashes.sh from gno-eth-ibc@%s in Docker with %s set", revision, strings.Join(names, ", "))
 	w.update(j)
 	return j
 }

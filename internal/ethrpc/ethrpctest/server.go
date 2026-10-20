@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // Handler answers one method: it receives the unpacked inputs and returns
@@ -34,16 +36,40 @@ type Server struct {
 	Calls    []string
 }
 
-// Block is a served block.
+// Block is a served block. Its hash is computed from the header built from
+// these fields (as a node's would be); Hash is filled in by the server.
 type Block struct {
 	Number    uint64
 	Hash      common.Hash
 	StateRoot common.Hash
 	Timestamp uint64
+	// Lie makes the server report a hash that is not its fields' (tests of
+	// the binding).
+	Lie bool
 }
+
+// Header builds the block's full header.
+func (b Block) Header() *types.Header {
+	return &types.Header{
+		ParentHash:  common.HexToHash("0x01"),
+		UncleHash:   types.EmptyUncleHash,
+		Root:        b.StateRoot,
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(b.Number),
+		GasLimit:    30_000_000,
+		Time:        b.Timestamp,
+		BaseFee:     big.NewInt(7),
+	}
+}
+
+// HashOf is the hash a node would report for the block.
+func (b Block) HashOf() common.Hash { return b.Header().Hash() }
 
 // New starts a server with one chain id and a head block.
 func New(chainID uint64, head Block) *Server {
+	head.Hash = head.HashOf()
 	s := &Server{chainID: chainID, head: head.Number, blocks: map[uint64]Block{head.Number: head}, handlers: map[string]map[string]Handler{}, abis: map[string]*gethabi.ABI{}, code: map[string][]byte{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
@@ -53,10 +79,18 @@ func New(chainID uint64, head Block) *Server {
 func (s *Server) AddBlock(b Block) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	b.Hash = b.HashOf()
 	s.blocks[b.Number] = b
 	if b.Number > s.head {
 		s.head = b.Number
 	}
+}
+
+// Head returns the served head block (with its computed hash).
+func (s *Server) Head() Block {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blocks[s.head]
 }
 
 // Contract registers an ABI at an address with some code bytes.
@@ -180,13 +214,16 @@ func (s *Server) block(tag string) any {
 	return blockJSON(b)
 }
 
-func blockJSON(b Block) map[string]any {
-	return map[string]any{
-		"number":    hexutil.EncodeUint64(b.Number),
-		"hash":      b.Hash,
-		"stateRoot": b.StateRoot,
-		"timestamp": hexutil.EncodeUint64(b.Timestamp),
+// blockJSON serves the full header as a node would (go-ethereum's own JSON
+// encoding, which includes the computed hash), with a lie where asked.
+func blockJSON(b Block) any {
+	raw, _ := json.Marshal(b.Header())
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	if b.Lie {
+		m["hash"] = common.HexToHash("0xbad").Hex()
 	}
+	return m
 }
 
 func (s *Server) call(params []json.RawMessage) (any, *rpcError) {

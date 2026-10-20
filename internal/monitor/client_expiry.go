@@ -51,17 +51,20 @@ func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) mode
 	}
 	var clients []model.Client
 	var prov []model.Provenance
-	var stale []string
+	var stale, unevaluated []string
 	for _, kind := range []string{store.KindGnoClients, store.KindEthClients} {
 		for _, s := range st.Snapshots(kind) {
 			cl, ok := s.Value.(model.Client)
 			if !ok {
 				continue
 			}
-			// Only subjects from their chain's latest successful collection
-			// are evaluated (docs/design.md §7.11); the rest are stale.
+			// Only subjects from their chain's latest successful,
+			// header-agreed collection are evaluated (docs/design.md §7.11);
+			// the rest are stale and keep their alarms.
 			if !pins.Fresh(cl.Chain, s.Provenance) {
-				stale = append(stale, fmt.Sprintf("%s/%s", cl.Chain, clientLabel(cl)))
+				subject := fmt.Sprintf("%s/%s", cl.Chain, clientLabel(cl))
+				stale = append(stale, subject)
+				unevaluated = append(unevaluated, "client_expiry/"+subject)
 				continue
 			}
 			clients = append(clients, cl)
@@ -69,18 +72,23 @@ func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) mode
 		}
 	}
 	if len(clients) == 0 {
+		var r model.CheckResult
 		if len(stale) > 0 {
-			return Skip(c.Name(), started, "every client snapshot is stale: "+collectionErrors(pins))
+			r = Skip(c.Name(), started, "every client snapshot is stale: "+collectionErrors(pins))
+		} else {
+			r = Skip(c.Name(), started, "no client snapshot yet")
 		}
-		return Skip(c.Name(), started, "no client snapshot yet")
+		r.Unevaluated = unevaluated
+		return r
 	}
 	var findings []model.Finding
 	for _, cl := range clients {
 		findings = append(findings, c.evaluate(cl, now))
 	}
 	r := Done(c.Name(), started, findings, prov)
+	r.Unevaluated = unevaluated
 	if len(stale) > 0 {
-		r.Reason = fmt.Sprintf("%d stale subject(s) skipped (%s): %s", len(stale), strings.Join(stale, ", "), collectionErrors(pins))
+		r.Reason = fmt.Sprintf("%d stale subject(s) not evaluated (%s): %s", len(stale), strings.Join(stale, ", "), collectionErrors(pins))
 	}
 	return r
 }
@@ -97,11 +105,14 @@ func latestPins(st store.Store) (Pins, bool) {
 
 func collectionErrors(p Pins) string {
 	var parts []string
-	if !p.GnoState.OK {
-		parts = append(parts, "gno: "+p.GnoState.Error)
-	}
-	if !p.EthState.OK {
-		parts = append(parts, "ethereum: "+p.EthState.Error)
+	for _, ch := range []model.Chain{model.ChainGno, model.ChainEthereum} {
+		st := p.State(ch)
+		switch {
+		case !st.OK:
+			parts = append(parts, string(ch)+": "+st.Error)
+		case !st.Verified:
+			parts = append(parts, string(ch)+": header not agreed")
+		}
 	}
 	if len(parts) == 0 {
 		return "collection ok"

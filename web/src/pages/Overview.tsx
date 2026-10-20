@@ -4,6 +4,15 @@ import { Empty, Loading, Pill, Provenance, statusKind } from "../components";
 import { iso, unix } from "../time";
 
 function ChainError({ state, error }: { state?: ChainState; error?: string }) {
+  if (state?.ok && !state.verified) {
+    return (
+      <p className="error">
+        header not agreed by the second provider
+        {state.consecutive_unverified ? ` ${state.consecutive_unverified}× in a row` : ""}: nothing
+        from this chain is evaluated until it agrees (design §3.3)
+      </p>
+    );
+  }
   return (
     <p className="error">
       collection failed
@@ -25,7 +34,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
     <div className="grid2">
       <div className="card">
         <h3>gno.land</h3>
-        {!pins.gno_state?.ok ? (
+        {!pins.gno_state?.ok || !pins.gno_state?.verified ? (
           <ChainError state={pins.gno_state} error={pins.gno_error} />
         ) : (
           <dl>
@@ -49,7 +58,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
       </div>
       <div className="card">
         <h3>Ethereum</h3>
-        {!pins.eth_state?.ok ? (
+        {!pins.eth_state?.ok || !pins.eth_state?.verified ? (
           <ChainError state={pins.eth_state} error={pins.eth_error} />
         ) : (
           <dl>

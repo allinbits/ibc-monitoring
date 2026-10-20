@@ -217,3 +217,30 @@ func TestWebhookSink(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+// Subjects a check could not evaluate keep their alarms (review finding 9).
+func TestUnevaluatedKeepsAlarms(t *testing.T) {
+	st := store.NewMemory(10)
+	rec := &recorder{}
+	m := NewManager(st, nil, rec)
+	t.Cleanup(func() { m.Close(time.Second) })
+	a := model.Finding{Subject: "a", Severity: model.SeverityCritical, Title: "a expired", AlarmKey: "c/a"}
+	b := model.Finding{Subject: "b", Severity: model.SeverityWarning, Title: "b warns", AlarmKey: "c/b"}
+	m.Apply(context.Background(), result(a, b))
+	rec.wait(t, 2)
+	// Next run: a's chain is stale, b is fine now → b clears, a stays.
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK, Findings: []model.Finding{}, Unevaluated: []string{"c/a"}})
+	ev := rec.wait(t, 3)
+	if ev[2].Type != "cleared" || ev[2].Alarm.Key != "c/b" {
+		t.Fatalf("events %+v", ev)
+	}
+	if al, ok := st.Alarm("c/a"); !ok || al.State != model.AlarmRaised {
+		t.Fatalf("unevaluated alarm cleared: %+v", al)
+	}
+	// Once a is evaluated again and clean, it clears.
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK, Findings: []model.Finding{}})
+	ev = rec.wait(t, 4)
+	if ev[3].Type != "cleared" || ev[3].Alarm.Key != "c/a" {
+		t.Fatalf("events %+v", ev)
+	}
+}

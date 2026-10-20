@@ -1,6 +1,7 @@
 package ethrpc
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"testing"
@@ -92,5 +93,44 @@ func TestAccountProofVerify(t *testing.T) {
 	values, err = q.Verify(stateRoot)
 	if err != nil || values[absent].Sign() != 0 {
 		t.Fatalf("absent slot: %v %v", values, err)
+	}
+}
+
+// A proof must answer exactly the requested account and slot set (review
+// finding 2): the fake node substitutes answers and each is refused.
+func TestProofCorrespondence(t *testing.T) {
+	asked := common.HexToAddress("0x000000000000000000000000000000000000bbbb")
+	slot := common.HexToHash("0x0a")
+	other := common.HexToHash("0x0b")
+	cases := []struct {
+		name   string
+		answer gethProofAnswer
+	}{
+		{"other account", gethProofAnswer{Address: common.HexToAddress("0xcccc"), Slots: []common.Hash{slot}}},
+		{"missing slot", gethProofAnswer{Address: asked, Slots: nil}},
+		{"extra slot", gethProofAnswer{Address: asked, Slots: []common.Hash{slot, other}}},
+		{"duplicate slot", gethProofAnswer{Address: asked, Slots: []common.Hash{slot, slot}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newProofServer(t, tc.answer)
+			c, err := Dial(context.Background(), srv.URL, "proof", Finality{Mode: "latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Proof(context.Background(), asked, []common.Hash{slot}, 1)
+			if !errors.Is(err, ErrProofMismatch) {
+				t.Fatalf("accepted: %v", err)
+			}
+		})
+	}
+	srv := newProofServer(t, gethProofAnswer{Address: asked, Slots: []common.Hash{slot}})
+	c, err := Dial(context.Background(), srv.URL, "proof", Finality{Mode: "latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := c.Proof(context.Background(), asked, []common.Hash{slot}, 1)
+	if err != nil || p.Address != asked || len(p.Storage) != 1 || p.Storage[0].Key != slot {
+		t.Fatalf("exact answer refused: %+v %v", p, err)
 	}
 }

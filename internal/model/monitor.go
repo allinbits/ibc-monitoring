@@ -54,6 +54,10 @@ type CheckResult struct {
 	Provenance []Provenance `json:"provenance"`
 	// ConsecutiveSkips counts skips since the last successful evaluation.
 	ConsecutiveSkips int `json:"consecutive_skips,omitempty"`
+	// Unevaluated lists the alarm keys of subjects this evaluation could not
+	// judge (stale or unverified data); their alarms are kept as they are
+	// (docs/design.md §7.11).
+	Unevaluated []string `json:"unevaluated,omitempty"`
 }
 
 // AlarmState of an alarm.

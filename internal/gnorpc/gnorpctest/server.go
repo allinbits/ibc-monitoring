@@ -18,12 +18,14 @@ import (
 // Fixture is a recording: the node's status and every abci_query answer keyed
 // by "<path>|<data>" (data as sent, e.g. "gno.land/r/aib/ibc/core.ClientIDs()").
 type Fixture struct {
-	ChainID string            `json:"chain_id"`
-	Height  int64             `json:"height"`
-	Hash    string            `json:"hash"`
-	Time    time.Time         `json:"time"`
-	AppHash string            `json:"app_hash,omitempty"`
-	Queries map[string]string `json:"queries"`
+	ChainID string    `json:"chain_id"`
+	Height  int64     `json:"height"`
+	Hash    string    `json:"hash"`
+	Time    time.Time `json:"time"`
+	AppHash string    `json:"app_hash,omitempty"`
+	// ValidatorsHash is served as both validators_hash and next_validators_hash.
+	ValidatorsHash string            `json:"validators_hash,omitempty"`
+	Queries        map[string]string `json:"queries"`
 	// Errors maps a query key to an ABCI error message.
 	Errors map[string]string `json:"errors,omitempty"`
 }
@@ -137,10 +139,12 @@ func (s *Server) block() any {
 		"block_meta": map[string]any{
 			"block_id": map[string]any{"hash": base64.StdEncoding.EncodeToString(mustHex(f.Hash))},
 			"header": map[string]any{
-				"chain_id": f.ChainID,
-				"height":   strconv.FormatInt(f.Height, 10),
-				"time":     f.Time,
-				"app_hash": base64.StdEncoding.EncodeToString(mustHex(f.AppHash)),
+				"chain_id":             f.ChainID,
+				"height":               strconv.FormatInt(f.Height, 10),
+				"time":                 f.Time,
+				"app_hash":             base64.StdEncoding.EncodeToString(mustHex(f.AppHash)),
+				"validators_hash":      base64.StdEncoding.EncodeToString(mustHex(f.ValidatorsHash)),
+				"next_validators_hash": base64.StdEncoding.EncodeToString(mustHex(f.ValidatorsHash)),
 			},
 		},
 	}

@@ -46,15 +46,17 @@ type recoveryConfig struct {
 
 // Governance reads IBCAdmin's ledger and guardian state at the pinned block.
 func (v *Views) Governance(ctx context.Context, b ethrpc.Block) (model.EthGovernance, error) {
-	g := model.EthGovernance{Provenance: v.provenance(b), Decisions: []model.EthDecision{}, Buffered: []uint64{}, Flags: []model.EthFlag{}, Holds: []model.EthHold{}}
+	g := model.EthGovernance{Provenance: v.provenance(b), Decisions: []model.EthDecision{}, Buffered: []model.Seq{}, Flags: []model.EthFlag{}, Holds: []model.EthHold{}}
 	addr := v.addrs.Admin
 	var err error
 	if g.Epoch, err = one[uint32](ctx, v, addr, v.admin, "epoch", b); err != nil {
 		return g, err
 	}
-	if g.LastSeq, err = one[uint64](ctx, v, addr, v.admin, "lastSeq", b); err != nil {
+	lastSeq, err := one[uint64](ctx, v, addr, v.admin, "lastSeq", b)
+	if err != nil {
 		return g, err
 	}
+	g.LastSeq = model.Seq(lastSeq)
 	if g.GovClient, err = one[string](ctx, v, addr, v.admin, "govClient", b); err != nil {
 		return g, err
 	}
@@ -116,14 +118,14 @@ func (v *Views) Governance(ctx context.Context, b ethrpc.Block) (model.EthGovern
 			g.ExecCodeHash = common.Hash(h).Hex()
 		}
 	}
-	for seq := uint64(1); seq <= g.LastSeq+Window; seq++ {
+	for seq := uint64(1); seq <= lastSeq+Window; seq++ {
 		d, err := v.Decision(ctx, g.Epoch, seq, b)
 		if err != nil {
 			return g, err
 		}
-		if seq > g.LastSeq {
+		if seq > lastSeq {
 			if d.State == 1 {
-				g.Buffered = append(g.Buffered, seq)
+				g.Buffered = append(g.Buffered, model.Seq(seq))
 			}
 			continue
 		}
@@ -147,7 +149,7 @@ func (v *Views) Decision(ctx context.Context, epoch uint32, seq uint64, b ethrpc
 	}
 	md := model.EthDecision{
 		Epoch:         epoch,
-		Seq:           seq,
+		Seq:           model.Seq(seq),
 		Hash:          common.Hash(d.Hash).Hex(),
 		Kind:          d.Kind,
 		State:         d.State,

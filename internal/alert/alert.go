@@ -112,8 +112,14 @@ func (m *Manager) Apply(_ context.Context, r model.CheckResult) {
 			m.store.PutAlarm(a)
 		}
 	}
+	// An alarm is cleared only by an evaluation of its subject that no longer
+	// finds it: subjects the check could not judge keep theirs (§7.11).
+	unevaluated := map[string]bool{}
+	for _, k := range r.Unevaluated {
+		unevaluated[k] = true
+	}
 	for _, a := range m.store.Alarms(false) {
-		if a.Check != r.Check || seen[a.Key] {
+		if a.Check != r.Check || seen[a.Key] || unevaluated[a.Key] {
 			continue
 		}
 		a.State = model.AlarmCleared

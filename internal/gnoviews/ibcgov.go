@@ -119,14 +119,16 @@ func (v *Views) Governance(ctx context.Context, routes []string, p Pin) (model.G
 	if val, err = v.eval(ctx, pkg, fmt.Sprintf("LastSeq(%d)", g.Epoch), p); err != nil {
 		return g, err
 	}
-	if g.LastSeq, err = val.Uint(); err != nil {
+	lastSeq, err := val.Uint()
+	if err != nil {
 		return g, err
 	}
+	g.LastSeq = model.Seq(lastSeq)
 
 	if g.Decisions, err = v.Decisions(ctx, p); err != nil {
 		return g, err
 	}
-	for seq := uint64(1); seq <= g.LastSeq; seq++ {
+	for seq := uint64(1); seq <= lastSeq; seq++ {
 		d, ok, err := v.Dispatch(ctx, g.Epoch, seq, p)
 		if err != nil {
 			return g, err
@@ -157,11 +159,15 @@ func (v *Views) Decisions(ctx context.Context, p Pin) ([]model.GnoDecision, erro
 	out := make([]model.GnoDecision, 0, len(djs))
 	for _, dj := range djs {
 		d := model.GnoDecision{Kind: dj.Kind, Text: dj.Text, State: dj.State, Note: dj.Note}
-		var err error
+		id, err := unum(dj.ID)
+		if err != nil {
+			return nil, fmt.Errorf("decision %s: %w", dj.ID, err)
+		}
+		d.ID = model.Seq(id)
 		for _, f := range []struct {
 			dst *int64
 			src json.Number
-		}{{&d.ID, dj.ID}, {&d.Made, dj.Made}, {&d.Recorded, dj.Recorded}, {&d.Due, dj.Due}, {&d.Applied, dj.Applied}, {&d.Cancelled, dj.Cancelled}} {
+		}{{&d.Made, dj.Made}, {&d.Recorded, dj.Recorded}, {&d.Due, dj.Due}, {&d.Applied, dj.Applied}, {&d.Cancelled, dj.Cancelled}} {
 			if *f.dst, err = num(f.src); err != nil {
 				return nil, fmt.Errorf("decision %s: %w", dj.ID, err)
 			}
@@ -186,25 +192,31 @@ func (v *Views) Dispatch(ctx context.Context, epoch uint32, seq uint64, p Pin) (
 		return d, false, err
 	}
 	d.Epoch = uint32(e)
-	if d.Seq, err = unum(dj.Seq); err != nil {
+	sq, err := unum(dj.Seq)
+	if err != nil {
 		return d, false, err
 	}
+	d.Seq = model.Seq(sq)
 	k, err := unum(dj.Kind)
 	if err != nil {
 		return d, false, err
 	}
 	d.Kind = uint8(k)
-	if d.Decision, err = num(dj.Decision); err != nil {
+	dec, err := unum(dj.Decision)
+	if err != nil {
 		return d, false, err
 	}
+	d.Decision = model.Seq(dec)
 	st, err := unum(dj.Status)
 	if err != nil {
 		return d, false, err
 	}
 	d.Status = uint8(st)
-	if d.Transport, err = unum(dj.Transport); err != nil {
+	tr, err := unum(dj.Transport)
+	if err != nil {
 		return d, false, err
 	}
+	d.Transport = model.Seq(tr)
 	if d.Sends, err = num(dj.Sends); err != nil {
 		return d, false, err
 	}

@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -39,6 +40,9 @@ func (e *Engine) RunOnce(ctx context.Context) []model.CheckResult {
 	if e.Now != nil {
 		now = e.Now()
 	}
+	if e.Alerts != nil {
+		e.applyChainAlarms(ctx, now)
+	}
 	var results []model.CheckResult
 	for _, c := range e.Checks {
 		r := c.Run(ctx, e.Store, now)
@@ -58,6 +62,45 @@ func (e *Engine) RunOnce(ctx context.Context) []model.CheckResult {
 		results = append(results, r)
 	}
 	return results
+}
+
+// applyChainAlarms raises collection_unavailable/<chain> after N consecutive
+// failed collections and verification_failing/<chain> after N consecutive
+// unverified ones, per chain, whatever the other chain does (§7.11).
+func (e *Engine) applyChainAlarms(ctx context.Context, now time.Time) {
+	threshold := e.DeferredAlarmFailures
+	if threshold <= 0 {
+		threshold = 6
+	}
+	pins, ok := latestPins(e.Store)
+	if !ok {
+		return
+	}
+	r := model.CheckResult{Check: "collection", Status: model.CheckOK, StartedAt: now, FinishedAt: now, Findings: []model.Finding{}}
+	for _, ch := range []model.Chain{model.ChainGno, model.ChainEthereum} {
+		st := pins.State(ch)
+		if st.ConsecutiveFailures >= threshold {
+			r.Status = model.CheckAlarm
+			r.Findings = append(r.Findings, model.Finding{
+				Subject:  string(ch),
+				Severity: model.SeverityCritical,
+				Title:    fmt.Sprintf("%s could not be read %d times in a row", ch, st.ConsecutiveFailures),
+				Detail:   st.Error,
+				AlarmKey: "collection_unavailable/" + string(ch),
+			})
+		}
+		if st.ConsecutiveUnverified >= threshold {
+			r.Status = model.CheckAlarm
+			r.Findings = append(r.Findings, model.Finding{
+				Subject:  string(ch),
+				Severity: model.SeverityCritical,
+				Title:    fmt.Sprintf("%s headers did not agree %d times in a row", ch, st.ConsecutiveUnverified),
+				Detail:   "the second provider disagrees or is unavailable; nothing from this chain is evaluated until it agrees (design §3.3)",
+				AlarmKey: "verification_failing/" + string(ch),
+			})
+		}
+	}
+	e.Alerts.Apply(ctx, r)
 }
 
 // applyDeferred raises <check>_unavailable after N consecutive skips, as a

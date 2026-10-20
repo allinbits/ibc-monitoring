@@ -26,7 +26,7 @@ type GnoHold struct {
 
 // GnoDecision is one entry of ibcgov's ledger (Render("decisions")).
 type GnoDecision struct {
-	ID        int64  `json:"id"`
+	ID        Seq    `json:"id"`
 	Kind      string `json:"kind"`
 	Text      string `json:"text"`
 	State     string `json:"state"` // pending | applied | cancelled | spent
@@ -41,14 +41,14 @@ type GnoDecision struct {
 // GnoDispatch is one Ethereum-bound dispatch (Render("dispatch/<e>/<seq>")).
 type GnoDispatch struct {
 	Epoch      uint32 `json:"epoch"`
-	Seq        uint64 `json:"seq"`
+	Seq        Seq    `json:"seq"`
 	Kind       uint8  `json:"kind"`
-	Decision   int64  `json:"decision"`
+	Decision   Seq    `json:"decision"`
 	Body       string `json:"body"` // hex envelope
 	Status     uint8  `json:"status"`
 	Redispatch bool   `json:"redispatch"`
 	InFlight   bool   `json:"in_flight"`
-	Transport  uint64 `json:"transport"`
+	Transport  Seq    `json:"transport"`
 	Sends      int64  `json:"sends"`
 	Event      string `json:"event"`
 }
@@ -63,7 +63,7 @@ type GnoGovernance struct {
 	Flags         []GnoFlag     `json:"flags"`
 	Epoch         uint32        `json:"epoch"`
 	EpochClient   string        `json:"epoch_client"`
-	LastSeq       uint64        `json:"last_seq"`
+	LastSeq       Seq           `json:"last_seq"`
 	Decisions     []GnoDecision `json:"decisions"`
 	Dispatches    []GnoDispatch `json:"dispatches"`
 	Provenance    Provenance    `json:"provenance"`
@@ -72,7 +72,7 @@ type GnoGovernance struct {
 // EthDecision is IBCAdmin.decision(epoch, seq) with derived fields.
 type EthDecision struct {
 	Epoch         uint32 `json:"epoch"`
-	Seq           uint64 `json:"seq"`
+	Seq           Seq    `json:"seq"`
 	Hash          string `json:"hash"`
 	Kind          uint8  `json:"kind"`
 	State         uint8  `json:"state"` // 0 none 1 buffered 2 pending 3 executed 4 spent 5 cancelled
@@ -104,7 +104,7 @@ type EthRecovery struct {
 // EthGovernance is the Ethereum side of the governance dashboard.
 type EthGovernance struct {
 	Epoch          uint32        `json:"epoch"`
-	LastSeq        uint64        `json:"last_seq"`
+	LastSeq        Seq           `json:"last_seq"`
 	GovClient      string        `json:"gov_client"`
 	GnoChainID     string        `json:"gno_chain_id"`
 	LastRecordTime int64         `json:"last_record_time"`
@@ -118,7 +118,7 @@ type EthGovernance struct {
 	ExecCodeHash   string        `json:"exec_code_hash"`
 	Decisions      []EthDecision `json:"decisions"`
 	// Buffered lists the sequences above LastSeq that hold a buffered decision.
-	Buffered   []uint64    `json:"buffered"`
+	Buffered   []Seq       `json:"buffered"`
 	Recovery   EthRecovery `json:"recovery"`
 	Provenance Provenance  `json:"provenance"`
 }

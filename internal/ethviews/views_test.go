@@ -141,7 +141,7 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Number != blockNumber || b.Finality != "finalized" || b.Hash != common.HexToHash("0x11") {
+	if b.Number != blockNumber || b.Finality != "finalized" || b.Hash != srv.Head().HashOf() || b.StateRoot != common.HexToHash("0x22") {
 		t.Fatalf("pinned %+v", b)
 	}
 	return v, b, srv

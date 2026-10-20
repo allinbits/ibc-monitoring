@@ -49,7 +49,15 @@ func TestStaleSubjectsAreSkipped(t *testing.T) {
 	if r.Status != model.CheckOK || len(r.Findings) != 1 || r.Findings[0].Subject != "ethereum/client-0" {
 		t.Fatalf("stale gno: %+v", r)
 	}
-	if !strings.Contains(r.Reason, "2 stale subject(s) skipped") || !strings.Contains(r.Reason, "gno/ethereum-1") || !strings.Contains(r.Reason, "gno: ") {
+	if len(r.Unevaluated) != 2 || r.Unevaluated[1] != "client_expiry/gno/tm-1" {
+		t.Fatalf("unevaluated %v", r.Unevaluated)
+	}
+	// The expired Tendermint client's alarm is kept: its subject was not
+	// evaluated, so nothing says it recovered.
+	if a, ok := st.Alarm("client_expiry/gno/tm-1"); !ok || a.State != model.AlarmRaised {
+		t.Fatalf("stale subject's alarm cleared: %+v", a)
+	}
+	if !strings.Contains(r.Reason, "2 stale subject(s) not evaluated") || !strings.Contains(r.Reason, "gno/ethereum-1") || !strings.Contains(r.Reason, "gno: ") {
 		t.Fatalf("reason: %q", r.Reason)
 	}
 	pins, _ := latestPins(st)
@@ -79,6 +87,47 @@ func TestStaleSubjectsAreSkipped(t *testing.T) {
 	}
 	if _, ok := st.Alarm("client_expiry_unavailable"); !ok {
 		t.Fatal("deferred alarm missing")
+	}
+	// Per chain: gno failed four times, Ethereum twice → both alarm at 2.
+	for _, k := range []string{"collection_unavailable/gno", "collection_unavailable/ethereum"} {
+		if a, ok := st.Alarm(k); !ok || a.State != model.AlarmRaised {
+			t.Fatalf("%s missing", k)
+		}
+	}
+}
+
+// A collection whose header does not agree is not fresh: its subjects are
+// not evaluated, and sustained disagreement alarms per chain.
+func TestUnverifiedIsNotFresh(t *testing.T) {
+	f, err := gnorpctest.Load("../gnoviews/testdata/devnet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsrv := gnorpctest.New(f)
+	t.Cleanup(gsrv.Close)
+	gno := gnoviews.New(gnorpc.New(gsrv.URL, gnorpc.WithName("gno-fixture")), gnoviews.DefaultPaths)
+	dead := gnoviews.New(gnorpc.New("http://127.0.0.1:1", gnorpc.WithName("dead")), gnoviews.DefaultPaths)
+	st := store.NewMemory(10)
+	sink := &recordingSink{}
+	eng := &Engine{
+		Collector:             &Collector{Gno: gno, Gno2: dead, RequireCrossCheck: true, Store: st},
+		Checks:                []Check{ClientExpiry{Config: DefaultClientExpiryConfig()}},
+		Alerts:                alert.NewManager(st, nil, sink),
+		Store:                 st,
+		DeferredAlarmFailures: 2,
+		Now:                   func() time.Time { return f.Time },
+	}
+	r := eng.RunOnce(context.Background())[0]
+	if r.Status != model.CheckSkipped || len(r.Unevaluated) != 2 {
+		t.Fatalf("unverified evaluated: %+v", r)
+	}
+	pins, _ := latestPins(st)
+	if !pins.GnoState.OK || pins.GnoState.Verified || pins.GnoState.ConsecutiveUnverified != 1 {
+		t.Fatalf("state %+v", pins.GnoState)
+	}
+	eng.RunOnce(context.Background())
+	if a, ok := st.Alarm("verification_failing/gno"); !ok || a.State != model.AlarmRaised {
+		t.Fatal("verification alarm missing")
 	}
 }
 
@@ -156,7 +205,7 @@ func TestVerificationFailsClosed(t *testing.T) {
 	liar := gnorpctest.New(&g2)
 	t.Cleanup(liar.Close)
 	pins = (&Collector{Gno: gno, Gno2: gnoviews.New(gnorpc.New(liar.URL), gnoviews.DefaultPaths), RequireCrossCheck: true, Store: store.NewMemory(10)}).Collect(context.Background())
-	if pins.GnoVerified != model.VerificationUnverified || !strings.Contains(pins.GnoCrossCheck, "hash mismatch") {
+	if pins.GnoVerified != model.VerificationUnverified || !strings.Contains(pins.GnoCrossCheck, "header mismatch") {
 		t.Fatalf("disagreeing: %s %s", pins.GnoVerified, pins.GnoCrossCheck)
 	}
 }

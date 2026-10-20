@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -117,3 +118,29 @@ func (a *Amount) UnmarshalJSON(b []byte) error {
 	*a = parsed
 	return nil
 }
+
+// Seq is a uint64 identifier (a packet sequence, a decision number) that
+// travels as a decimal string: JavaScript cannot hold a uint64 in a Number.
+type Seq uint64
+
+// MarshalJSON encodes the identifier as a decimal string.
+func (q Seq) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strconv.FormatUint(uint64(q), 10))
+}
+
+// UnmarshalJSON accepts a decimal string or a bare integer token.
+func (q *Seq) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "" || s == "null" {
+		*q = 0
+		return nil
+	}
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("identifier %q: %w", s, err)
+	}
+	*q = Seq(v)
+	return nil
+}
+
+func (q Seq) String() string { return strconv.FormatUint(uint64(q), 10) }
