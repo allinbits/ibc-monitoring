@@ -1,0 +1,26 @@
+# secrets and local configuration
+.env
+.env.*
+!.env.example
+ibcmon.yaml
+ibcmon.local.yaml
+deployments/*.local.*
+
+# build output
+/bin/
+/dist/
+/web/dist/
+/web/node_modules/
+/internal/api/webdist/*
+!/internal/api/webdist/.gitkeep
+
+# data
+/data/
+*.sqlite
+*.sqlite-journal
+
+# tooling
+.cache/
+coverage.out
+*.test
+.DS_Store
