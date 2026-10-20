@@ -1,0 +1,44 @@
+# Deployment manifest (docs/design.md §9.2; ADR §7.6 "mixed releases"): one
+# entry per deployed component, named as gno-eth-ibc's VerifyCodehashes
+# COMPONENTS takes it. Operators keep the real file beside the deployment
+# (git-ignored as deployments/*.local.*); the worker verifies per release.
+chain_id: 31337
+components:
+  - name: transfer           # the ICS20 proxy's implementation (the fork)
+    address: "0x0000000000000000000000000000000000000000"
+    modules:                 # controls, reconcile, evidence (delegatecalled)
+      controls: "0x0000000000000000000000000000000000000000"
+      reconcile: "0x0000000000000000000000000000000000000000"
+      evidence: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    compiler: { solc: "0.8.28", optimizer_runs: 200, via_ir: true, evm_version: cancun, bytecode_hash: none }
+    constructor_bindings: {}
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: router
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: escrow
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: ibcerc20
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: admin              # IBCAdmin with IBCAdminNative: always the launch release
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: exec               # IBCAdminExec with its checks and recovery modules
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: launchClient
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+  - name: launchVoucher
+    address: "0x0000000000000000000000000000000000000000"
+    source_revision: "72a41de"
+    code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"

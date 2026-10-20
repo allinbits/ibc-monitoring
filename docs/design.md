@@ -214,8 +214,11 @@ resolved from `finalized` once per evaluation.
 Conventions:
 
 - `qeval` means `abci_query` path `vm/qeval`, data `<pkgpath>.<Expr>`; the answer is one typed value per line in
-  Go syntax, for a string `("…" string)` (Go-quoted), for an integer `(123 int64)`, for a bool `(true bool)`. The
-  monitor unquotes strings and parses numbers; it never evaluates anything else.
+  Go syntax, for a string `("…" string)` (Go-quoted), for an integer `(123 int64)`, for a bool `(true bool)`, for a
+  slice built by the call `(slice[("a" string),("b" string)] []string)`. A slice read from persisted state renders
+  as references (`slice[ref(…)]`) with no elements, so lists are read from Render JSON pages wherever one exists
+  and the slice parser refuses references. The monitor unquotes strings and parses numbers; it never evaluates
+  anything else. `vm/qeval_json` (amino JSON of the exported values) is not used.
 - `qrender` means path `vm/qrender`, data `<pkgpath>:<path>`; the answer is the realm's `Render(path)` output,
   **Markdown or JSON depending on the path** (see each row). JSON paths are parsed; Markdown paths are shown as
   text only (§10.3).
@@ -841,7 +844,7 @@ a `/metrics` endpoint is phase 2 for the operators who want it).
 | Phase | Deliverable | Status |
 |---|---|---|
 | **0 Design** | this document | done |
-| **1 Scaffold and read-only data layer** | repo, CI, `gnorpc`, `ethrpc`, typed views of §4 with fixtures; dashboards: clients, routes, governance ledger; monitor skeleton with `client_expiry` end to end (store, API, log and webhook sinks); worker skeleton | in progress (this session) |
+| **1 Scaffold and read-only data layer** | repo, CI, `gnorpc`, `ethrpc`, typed views of §4 with fixtures; dashboards: clients, routes, governance ledger; monitor skeleton with `client_expiry` end to end (store, API, log and webhook sinks); worker skeleton | **built**: Go module with CI and lint; `gnorpc` (height-pinned `qeval`/`qrender`, block results) and `gnoviews` (clients with derived expiry, routes with client-side live meters, send-record pages, ibcgov ledger, seats, flags, hold, dispatches); `ethrpc` (finalized/depth/latest pinning, calls, code, logs, proofs) and `ethviews` (IBCAdmin ledger and buffer, flags, holds, recovery; transfer route state, flags, limits with live levels, incidents, `clientRecon`, send records; GnoLightClient); fake RPC servers and fixtures for both; the in-memory store; the alert manager with log and webhook sinks and the deferred-alarm rule; the collector with second-provider block-hash cross-checks; `client_expiry`; the read-only API; the worker's `codehash` job; the console with Overview, Clients, Routes and Governance pages. Not yet: SQLite, `ibcmon record`, the Ethereum route's verifier resolved from router logs (the configured address is read), the `Reader.Meters` path through `ibcgov.view()` (to verify on a devnet; the client-side refill is used and labelled) |
 | **2 Full read model** | every view of §4 incrementally (send-record pages, logs), every dashboard of §5 including incidents, reconciliation and recovery; `/metrics`; `ibcmon record` fixtures; the governance watch (§7.7); liveness alarms (§7.6) complete | next |
 | **3 Integrity (T4)** | closed pairs, supply identity, orphans, proof heights; alarm state machine; auto-flag sink (off by default) with dry-run; drill against `e2e-local.sh` with injected forgeries | |
 | **4 Actions** | Adena and EIP-1193 wallets; guardian actions; permissionless actions; GovDAO drafts from the builders; light-client mode (Helios) documented and tested; tm2 light-client walk for gno headers | |

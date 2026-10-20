@@ -82,9 +82,14 @@ func TestAPI(t *testing.T) {
 	if code != 404 {
 		t.Fatalf("unknown api path %d", code)
 	}
-	// With no console build embedded, the root explains itself.
+	// The root serves the console when it is built in, else a notice; either
+	// way it is never a 404 (SPA fallback).
 	code, body = get("/")
-	if code != 200 || !strings.Contains(body, "not built") {
+	served := strings.Contains(body, "not built") || strings.Contains(body, `<div id="root">`)
+	if code != 200 || !served {
 		t.Fatalf("root %d %s", code, body)
+	}
+	if code, _ = get("/clients"); code != 200 {
+		t.Fatalf("spa fallback %d", code)
 	}
 }

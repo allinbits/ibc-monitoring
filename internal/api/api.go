@@ -73,10 +73,15 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	_, ok := s.Store.Snapshot(store.KindPins, "latest")
+	pins, ok := s.Store.Snapshot(store.KindPins, "latest")
 	status := "starting"
 	if ok {
 		status = "ok"
+		// The collector reports a chain it could not read in its pins; the
+		// health answer says so without exposing the error text.
+		if b, err := json.Marshal(pins.Value); err == nil && (strings.Contains(string(b), `"gno_error":"`) || strings.Contains(string(b), `"eth_error":"`)) {
+			status = "degraded"
+		}
 	}
 	writeJSON(w, map[string]any{"status": status, "time": time.Now().UTC()})
 }
