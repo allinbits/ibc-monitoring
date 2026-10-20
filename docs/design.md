@@ -399,7 +399,7 @@ fallback (calling a module's own address reverts `NotDelegated`). `IBCAdmin` is 
 
 | Read | Gives |
 |---|---|
-| `routeKey(clientId) string`, `currentClient(routeKey) string`, `isRetired(clientId) bool`, `getEscrow(routeKey) address` | aliases and the escrow address per route |
+| `routeKey(clientId) string`, `currentClient(routeKey) string`, `isRetired(clientId) bool`, `getEscrow(routeKey) address` | aliases and the escrow address per route. The Ethereum route is **discovered on Ethereum**: `IBCAdmin.govClient()` → `routeKey` → `currentClient(routeKey)` at the Ethereum pin is the route's current client **there**, and its generations come from Ethereum's own history (`GnoRouteMigrated{old, new, routeKey}`, `isRetired`); gno.land's view of the same route (its client's `counterparty_client_id`, its `replaced` list) is compared with it **separately**, as the cross-chain `route_relationship` check, so a replacement or recovery Ethereum executed before gno.land processed its notice shows as a relationship mismatch, never as the old client attributed to a fresh Ethereum snapshot |
 | `routeClosed(c) bool`, `routeReopening(c) bool`, `routePaused(c) bool`, `refundsHeld(c) bool`, `recoveryBlocked(c) bool` | route state |
 | `routeFlags(c) Flag[6]`, `refundsFlags(c) Flag[6]` (`Flag{blockNumber, time}`, zero = not standing), `routeHold(c) Flag`, `refundsHold(c) Flag`, `guardianKeys() address[6]` | flags per seat and the two holds of the route. A hold view gives its **start**; it ends 24 h after the guardian flags **dipped** below two (`Guardians.hold`: `dipTime + grace`), or at once when a guardian flag that stood at the dip's start lost its seat (`lostInDip`: that seat's key was replaced) — and `dipTime` is not exposed. **The transfer app emits no hold-history event** (`HoldEnded` is `IBCAdmin`'s only), so a route hold's end is replayed from `GnoRouteFlagSet`/`GnoRouteFlagCleared` and `GnoGuardianKeysSet` with the seat generations: a flag stands only while its seat's key is the one that set it; the dip is the first moment fewer than two guardian flags stand; the end is the dip plus 24 h, or the replacement that removes a flag standing at the dip (a watch key's or an unrelated seat's replacement ends nothing). Where the event history does not reach back to the hold's start, the end is **unknown** and shown as such |
 | `limits(c, token) LimitsView{set, limits{maxPerMessage, dayCap, refundCap, sendMax, sendMin}, receiveLevel, refundLevel}` | per token limits and the **live** bucket levels |
@@ -907,15 +907,27 @@ reconciled **continuously**, not only when a receive triggers it.
   poisoned-verifier finding below; one in an **unrelated** client is a `warning` alarm
   (`unrelated_client_contradiction`) and a dashboard diagnostic, never a containment intent — it becomes a new
   finding, with the relationship as part of its evidence, only if the client later enters the graph or a route.
-  For every client, authorized or not, at discovery and at every trust-generation change, **every retained** consensus state at or above
-  `TrustedFromSlot` (`consensus_states` pages, agreed) is authenticated against the slot mapping, oldest first,
-  up to an authenticated cursor; then every new consensus state at slot `s` with `state_root` is compared with
-  the execution block the authenticated slot mapping names (§7.0). A pruned or unreadable intermediate state
-  leaves the record **incomplete** (alarm), never certified by the head. A different root at an authenticated slot is a
+  For every client, authorized or not, at discovery **every retained** consensus state at or above
+  `TrustedFromSlot` is authenticated against the slot mapping, oldest first, up to an authenticated cursor; then
+  every new consensus state at slot `s` with `state_root` is compared with the execution block the
+  authenticated slot mapping names (§7.0). The `consensus_states` pages enumerate only the **current verifier's
+  own** states (`render.gno`: `lc.ConsensusStateByHeight`); a verifier replacement keeps the retired verifier's
+  states in the client's `history` and `overrides`, which the pages do not list but `GetConsensusState` still
+  serves for proofs (`ethereum.gno`: "whatever store — the client's own, the overrides, the history"), one
+  height at a time (`consensus_states/<rev>/<h>`). The record is therefore kept **per client across verifier
+  generations**: it is never reset by a trust-generation change but **replayed** — every height the monitor's
+  own record holds for an earlier generation (every state it saw, authenticated or not) is re-read as the
+  **effective** state at that height (`consensus_states/0/<h>`, agreed) and compared again with the slot mapping,
+  so an override that changed the root at an authenticated height is caught as a poisoned verifier. Heights a
+  retired verifier held that the monitor never observed (a replacement before discovery, a gap in observation)
+  cannot be enumerated from the chain: the record is **incomplete** until §15 **P5** lands. A pruned, unreadable
+  or unenumerable intermediate state leaves the record **incomplete** (alarm), never certified by the head. A different root at an authenticated slot is a
   poisoned gno-side verifier: conclusive, contained at once (§7.10) — and, since such a verifier can also
   authenticate forged epoch notices (ADR §8.5 R2), the governance dashboard shows the finding on the epoch.
-- A trust-generation change (`ClientTrustGeneration`, `GnoRouteMigrated`, kind 6 executions) resets the record for
-  that client; the dashboard shows the last authenticated height per client.
+- A trust-generation change (`ClientTrustGeneration`, `GnoRouteMigrated`, kind 6 executions) starts a new
+  generation in the record for that client (Ethereum's clients: the candidate's constructor state, §7.6 first
+  bullet; gno.land's: the replay above); the dashboard shows the last authenticated height per client and
+  generation, and whether the record is complete.
 
 ### 7.7 Foreign decisions (`foreign_decisions`)
 
@@ -940,9 +952,17 @@ source's own dispatch ledger, bytes for bytes:
     dispatched but Ethereum has not accepted at `E` is **in transit**: a liveness finding (§7.8), never a
     mismatch. A tombstone range that no accepted delivery accounts for is a **foreign decision** with immediate
     effect;
-  - a recorded, buffered or executed decision whose hash is no gno dispatch's, or a `Conflict{e, seq, stored,
-    received}` whose `stored` hash is not gno.land's bytes at that number: a **foreign decision** (ADR §5.4:
-    "forged governance packets … can occupy sequence numbers with the attacker's bytes");
+  - two hashes are reconciled **separately** at every delivery: the **stored** one (`decision(e, seq).hash`, by
+    proof) and the **incoming** one (`DecisionReceived.hash`, and `Conflict.received`, from the logs at a
+    header-agreed block). Once `G` covers the delivery's proof height, an incoming hash that is not
+    `keccak256(DispatchBody(e, seq))` is a **foreign decision** whether the contract stored it (a recorded,
+    buffered or executed decision) **or rejected it as a conflict**: `_deliver` leaves `d.hash` unchanged and
+    emits `Conflict(ep, seq, stored, received)`, so the stored hash stays legitimate while `received` identifies
+    the forgery, and re-reading `decision().hash` can never authenticate it — the verifier still proved an
+    envelope gno.land never dispatched (ADR §5.4: "forged governance packets … can occupy sequence numbers with
+    the attacker's bytes"). A stored hash that is not gno.land's is a foreign decision too; a conflict whose
+    `received` is gno.land's bytes is a legitimate redelivery that lost to a foreign stored hash, and points at
+    the stored one. An ordinary conflict — both hashes gno.land's at different numbers, a duplicate — alarms only;
   - a delivery whose gno dispatch is **absent at a pin that does not yet cover its proof height**: `unresolved`,
     refreshed, never flagged (§7.0).
   A foreign decision is conclusive, contained at once (§7.10), **and** the response includes a watch-key flag on
@@ -1036,24 +1056,38 @@ of §7.10 is therefore not one intent but one per **flag function**, each eligib
 
 | Milestone | Authenticated by | Intents that close (and are not re-created for this incident) |
 |---|---|---|
-| M1 **replacement verified** | the retired client marked on both chains and the replacement installed by an executed kind 10 / `NewReplaceRouteRequest` whose candidate the worker verified (§9) and whose consensus history authenticates (§7.6) | none yet: every flag stays |
-| M2 **settlement evidence verified** | the pending kind 12 / `NewSettleRequest` items each name a retired client's record the monitor itself classifies the same way (§7.1: an owed refund with its amount, a rejection, a delivery, a forged refund, a forged receive), the decision recorded on both chains, and no item the monitor classifies otherwise | the **`refunds`** flags on both chains: the sink clears no flag, but their intents close so that governance's clear (kind 2 / `ClearFlag`) stands and the refund-paying settlement executes |
-| M3 **economic reconciliation finished** | a later evaluation at a closed pair finds no residual and no shortfall, after the losses were booked, remedied or accepted and the route reopened (`closed` false, `loss_closed` false on both chains) | the **ingress** containment: gno `credits` and `payouts`, Ethereum's pause flags (receives and escrowed sends) |
-| M4 **governance path repaired** | the foreign-decision row of the table above | `IBCAdmin`'s own flag |
+| **MG** **governance channel cleared for repair** (before any execution) | `IBCAdmin`'s own flag defers **every** kind but an unpause while it stands (`IBCAdmin.execute`: `kind != KIND_UNPAUSE && (holdStands \|\| flagged) → Deferred`), the repair decisions included, so it must be released **before** the repair executes, on evidence that nothing dangerous is pending: (i) every decision pending on `IBCAdmin` at the pin — recorded or buffered, in no terminal state — matches bytes for bytes a gno.land dispatch of its epoch (own node, agreed; §7.7), and every foreign delivery of the incident is terminal: tombstoned by an accepted gno cancel, spent, or of an epoch that is past; (ii) each pending **repair** decision — a kind 10 replacement, a kind 6 or 7 correction, a kind 9 hand-over — names a candidate the worker verified (§9: code hash, layout diff, manifest, `gnoBusy()`; for a client candidate, a consensus history that authenticates, §7.6); (iii) the transfer containment of the route stands on both chains (the ingress and `refunds` flags), so releasing the channel exposes no funds. A pending decision that fails (i) or (ii) is a `dangerous_pending_decision` finding (`break`): the intent stays and the dashboard names the decision to cancel | `IBCAdmin`'s own flag: the sink's intent closes so that its owner (or kind 2, which the flag does not defer) clears it and the repair executes; every transfer flag stays. A **new** foreign delivery or notice, or a pending decision that stops matching after MG, is a new finding with a new incident generation, and the flag is eligible again |
+| **M1** **replacement verified** | the retired client marked on both chains and the replacement installed by an executed kind 10 / `NewReplaceRouteRequest` whose candidate the worker verified (§9) and whose consensus history authenticates (§7.6) | none yet: every transfer flag stays |
+| **M2** **settlement evidence verified**, **per chain** | validated against **independently authenticated destination outcomes**, never against §7.1's accounting classification of the source record (a forged success acknowledgement leaves the source record "settled" while the destination's authenticated evidence establishes an owed refund — the evidence wins and an action 1 for it is valid): for each item of the chain's settlement decision, the record's outcome at the destination established by the monitor itself (a delivery: the receipt and acknowledgement under `(P.DestinationClient, s)` at a pin covering the record's proof, §7.4; a refundable one: absence by the §7.4 tests; a collision: a different packet at the sequence), the record **proven through the replacement verifier** under its **current generation** (Ethereum: `sendRecord.proven ≠ none`, `provenBy` the route's current verifier, `provenGen` its trust generation, by proof; gno.land: `Proven`, `ProvenBy`, `ProvenGen` with the realm's own `trusted(client, gen)` rule of `PlanSettlement`), the incident **prepared** (Ethereum: `prepareIncident` complete and the replacement checkpointed, `incidents`/`clientRecon` by proof; gno.land: `Prepared()`), and the action and amount matching the proven outcome (pay ↔ refundable or collision, with `amount − refunded`; reject, delivered, loss ↔ delivered; forged receive ↔ the receive's booked loss). **Ethereum**: the recorded kind 12 for the route's retired client; **gno.land**: the pending `NewSettleRequest` for the same client — two independently governed batches, each judged on its own | the **`refunds`** flag **of that chain**: the sink clears no flag, but the intent closes so that governance's clear (kind 2 / `ClearFlag`) stands and the refund-paying settlement executes there; the other chain's `refunds` intent waits for that chain's own M2 |
+| **M3** **ingress release** | **both** of: (a) the economic reconciliation finished — a later evaluation at a closed pair finds no residual and no shortfall, after the losses were booked, remedied or accepted and the route reopened (`closed` false, `loss_closed` false on both chains); **and** (b) for **every** finding of the incident, its exploit path repaired and its persistent effects reconciled by the resolution table above: a poisoned client or fabricated root → the client retired on both chains and the epoch switched past it; a forged entitlement → terminal with its loss booked; a foreign decision → the foreign-decision row in full, **in particular an implementation a foreign kind 7 installed replaced** by one an authenticated decision installed and the worker verified (the proxy's implementation slot by proof). A balanced identity alone never retires the ingress containment: a malicious implementation can report balanced state until it is triggered, and a poisoned verifier can prove a new receive tomorrow | the **ingress** containment: gno `credits` and `payouts`, Ethereum's pause flags (receives and escrowed sends) |
+| **M4** **governance path repaired** | the foreign-decision row of the resolution table above, in full | nothing left to release (MG released the channel); the finding resolves |
 
-Before M2 every flag of the incident is eligible; a flag cleared by its owner while its function is still
-eligible is re-asserted under a new incident generation (§8.4). After a function's milestone the sink never sets
-that function's flag again for this incident, whatever the finding's state, and a flag governance cleared to
-execute the repair is left cleared; a **new** finding (new exposure, a deficit booked after the reopening) opens
-a new incident with every function eligible again. The sink's "re-assert a flag cleared during a standing break"
-applies, per flag function, only while that function is still eligible under this table.
+The milestones are the sink's **only** exceptions to re-assertion, each read from the chains at a header-agreed,
+finalized pin, never declared by an operator; the console shows, per open intent, the milestone it waits for
+and which of its conditions hold. Before a function's milestone every flag of that function is eligible: one
+cleared by its owner while still eligible is re-asserted under a new incident generation (§8.4). After the
+milestone the sink never sets that function's flag again for this incident, whatever the finding's state, and
+a flag governance cleared to execute the repair is left cleared; a **new** finding (new exposure, a deficit
+booked after the reopening, a new foreign delivery, a dangerous pending decision) opens a new incident with
+every function eligible again. The complete repair sequence is a required test (§13).
 
 ### 7.11 Readiness and freshness
 
 Every RPC request is bounded (`monitor.request_timeout`, default 20 s) and so is each chain's collection
 (`monitor.collection_timeout`, default 60 s): a provider that accepts a request and never answers is a **failed
 collection** for that chain, counted towards `collection_unavailable/<chain>` like any other failure, never an
-open-ended wait that would silence the deferred and liveness alarms. The two chains collect **concurrently**, so
+open-ended wait that would silence the deferred and liveness alarms. Each chain's collection publishes its
+snapshots as **one coherent bundle** (gno.land: clients, routes, governance and a **discovery** record naming
+the collection, its pin and its verification, written atomically at the end; nothing of a failed collection is
+published). The Ethereum collection discovers its own subjects on Ethereum (§4.2) and reads the gno discovery
+only for the cross-chain inputs it cannot get there (the denoms' tokens, the relationship): one **immutable**
+discovery, taken at its start, named by collection id in every Ethereum route's provenance; on start-up, when
+none exists yet, it waits for this round's gno discovery within its own deadline. An Ethereum collection whose
+dependency is missing or incomplete is **incomplete** — collected, but not fresh — and says what it lacks; a
+missing dependency never counts as a complete collection. **Chain-local** checks (a client's expiry, a chain's
+governance watch) run as soon as that chain's bundle is published; only **cross-chain** checks (the identity,
+the orphans, the relationship) wait for both, so a stalled provider on one chain delays nothing on the other.
+The two chains collect **concurrently**, so
 a stalled provider on one chain never delays the other chain's checks.
 
 Every snapshot carries the collection it came from. A check evaluates only subjects whose snapshots are
@@ -1355,6 +1389,19 @@ Only then is `autoflag.dry_run: false` allowed on a guardian instance, and the o
   mode, which is explicit in the configuration (`eth.finality: "beacon" | "tag" | "depth:N"`); the local target
   also sets `instance.require_cross_check: false` and the second provider to the same node, so header agreement
   is exercised but not independent — the script says so in its output.
+- **Repair sequence (a release gate of the auto-flag sink, §12).** An engine-level scenario over recorded
+  fixtures drives the complete runbook with the sink in dry run and asserts the set of open intents and the
+  bytes it would sign after every step: a foreign delivery → the containment intents of every function on
+  both chains; gno.land's cancel tombstones it, the kind 10 and kind 7 repairs are recorded and the worker
+  verifies their candidates → **MG**: the `IBCAdmin` intent closes, the owner clears the flag, nothing is
+  re-signed; the kind 10 executes → **M1**; the records are proven through the replacement, the incident
+  prepared, the kind 12 recorded on Ethereum and the `NewSettleRequest` on gno.land → **M2 per chain**: each
+  `refunds` intent closes only when its own chain's batch validates, governance clears, the settlements execute,
+  nothing is re-signed; losses booked, route reopened, identity balanced → **M3 only after** the kind 7
+  replacement implementation is installed and verified — with the foreign implementation still installed the
+  ingress intents stay although the identity balances; a new foreign delivery injected at any step opens a new
+  generation with every function eligible again. The same scenario with the sink live runs against anvil and
+  the gno testnet (`make e2e`).
 - **Frontend.** Vitest for the API client (bigint parsing, provenance), the amount formatter and the untrusted-text
   components; a Playwright smoke test against the fixture-backed API is phase 2.
 - **CI.** Build, vet, lint and test of both halves on every push; the Docker-based worker jobs are tested with a
@@ -1393,7 +1440,7 @@ fallback exists. The second group lists conveniences. The owner decides which to
 | supply identity, Ethereum-native denom (§7.1, §7.3) | exact gno voucher supply, and an independent check for mints outside the bridge | the page's `total_supply` is **float64**; the ledger's `TotalSupply()` is exact but reachable only through the realm's internals; mint/burn events exist at the token level | read the ledger's exact `TotalSupply()` by `qeval` through the package-level registry (pinned to the verified `ImplVersion`), **and** rebuild the supply at the token level from the ledger's mint and burn events (every path: claim payouts, sweep payments, refund and reconciliation re-mints, returns); a bridge-records replay is not a supply | **P1** (exact `total_supply` on the page) replaces the internals read; the token-level event replay stays the independent check |
 | cover per physical account (§7.1) | exact physical balance and exact obligations | balance exact (`bank/balances`, `BalanceOf`); obligations of non-route clients only through `total_escrow` (**float64**) | replay per-client obligations for Ethereum routes from records; non-route clients' obligations from `total_escrow` while below 2^53 | **P1** (exact `total_escrow`) for a non-route client's obligation beyond 2^53 |
 | closed pairs, orphans (§7.2, §7.4) | proof heights; packet bytes; retained send records; router sequences | proof heights only in transactions; bytes in events; records and sequences by proof | decode proof heights from the receive/ack/timeout transactions (§4.1); defer when undecodable | none (C6 is a convenience) |
-| root comparison, header record (§7.5, §7.6) | each client's trusted states; slot → execution block mapping | all readable; initial state only from the constructor's storage | read `getConsensusState(latestHeight)`/`consensus_states` at discovery (§7.6) | none |
+| root comparison, header record (§7.5, §7.6) | each client's trusted states **across verifier generations**; slot → execution block mapping | Ethereum: all readable, the initial state only from the constructor's storage; gno.land: the pages list the current verifier's own states only, the inherited `history`/`overrides` are served per height but not enumerable | read `getConsensusState(latestHeight)`/`consensus_states` at discovery; replay the monitor's own record of earlier generations through the effective state per height (§7.6) | **P5** (effective-history enumeration) for every generation the monitor's own record does not cover; until then that record is `incomplete`, never certified |
 | foreign decisions (§7.7) | every delivery's hash across epochs; gno dispatch bytes; tombstones | `DecisionReceived` events, `decision(e, seq).hash`, `tombstones(e)`, `DispatchBody(e, seq)` — all present; retained `params` are **not** needed (the hash is compared with the authenticated bytes) | historical bytes also from the delivery transactions | none (C5 is a convenience) |
 | halted decisions (§7.7, §7.9) | whether a buffered decision halted | not recorded | simulate `drain()` with `eth_call` at the pinned block | none (C5) |
 | live meters, float runway (§5.2, §7.8) | the live bucket level | not derivable (epoch reset, `Frac`, stored rate and ceiling) | show the stored level and use the cap's rate | **P3** (`Reader.Meters` export or `meter.live`) for the live-level feature only |
@@ -1417,6 +1464,12 @@ replayable until a pruning policy says otherwise.
 
 **P4. Hold ends and seat generations (both chains).** Expose the dip (`belowSince`, `dipTime`) or the computed
 end on the hold views, and the seat generations (`seatGen`, `Keys.gen`).
+
+**P5. Effective consensus history of an Ethereum client (gno-realms).** A render (`consensus_states?all` or
+`consensus_states/history`) that enumerates, per verifier generation, every height `GetConsensusState` would
+serve — the current verifier's own states, the `overrides` and each retired verifier's `history` interval —
+with the generation that holds it. Without it the monitor can replay only what it observed itself, and a
+replacement that predates its discovery leaves the header record incomplete (§7.6).
 
 ### Conveniences
 
