@@ -242,27 +242,39 @@ func TestExpiryWithNonZeroGenesisSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const key = "vm/qrender|gno.land/r/aib/ibc/core:clients?page=1&limit=100"
-	var page map[string]any
-	if err := json.Unmarshal([]byte(f.Queries[key]), &page); err != nil {
-		t.Fatal(err)
-	}
+	// The reader takes the clients page and each client's detail: both
+	// carry the client state and the stored consensus state, so both get
+	// the non-zero genesis slot and lose the stored timestamp (the test is
+	// about the derivation, not the stored timestamp).
+	srv := gnorpctest.New(f)
+	t.Cleanup(srv.Close)
 	var cs map[string]any
-	for _, it := range page["items"].([]any) {
-		item := it.(map[string]any)
-		if item["type"] == "ethereum" {
+	for _, key := range []string{"vm/qrender|gno.land/r/aib/ibc/core:clients?page=1&limit=100", "vm/qrender|gno.land/r/aib/ibc/core:clients/ethereum-1"} {
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(f.Queries[key]), &doc); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		items := []map[string]any{doc}
+		if list, ok := doc["items"].([]any); ok {
+			items = nil
+			for _, it := range list {
+				items = append(items, it.(map[string]any))
+			}
+		}
+		for _, item := range items {
+			if item["type"] != "ethereum" {
+				continue
+			}
 			cs = item["client_state"].(map[string]any)
 			cs["genesis_slot"] = "1000"
-			delete(item, "last_consensus_state") // the derivation, not the stored timestamp
+			delete(item, "last_consensus_state")
 		}
+		raw, _ := json.Marshal(doc)
+		srv.Set(key, string(raw))
 	}
 	if cs == nil {
 		t.Fatal("no ethereum client in the fixture")
 	}
-	raw, _ := json.Marshal(page)
-	srv := gnorpctest.New(f)
-	t.Cleanup(srv.Close)
-	srv.Set(key, string(raw))
 	v := New(gnorpc.New(srv.URL, gnorpc.WithName("fixture")), DefaultPaths)
 	pin, err := v.LatestPin(context.Background())
 	if err != nil {
