@@ -8,10 +8,12 @@ gno.land ↔ Ethereum route: the monitors (T4) and the watch tool (T5) of the
   specification this repository is built to.
 - **Status:** phase 1 (see design §12). Read-only data layer for both chains,
   the clients / routes / governance dashboards, the monitor engine with the
-  `client_expiry` liveness check end to end, log and webhook alert sinks, the
-  worker's code-hash job. The integrity checks (supply identity, orphans),
-  the wallet actions and the Docker-based build verification are marked
-  `TODO(phase N)` in the code.
+  `client_expiry` liveness check end to end, asynchronous log and webhook
+  alert sinks, the worker's code-hash job. The integrity checks (supply
+  identity, orphans, header record, foreign decisions), the wallet actions
+  and the Docker-based build verification are marked `TODO(phase N)` in the
+  code. The first production milestone is alarm-only (design §12, release
+  gates).
 
 One Go binary, `ibcmon`, runs the monitor, the worker and the API, and serves
 the TypeScript console. Self-host it against your own nodes; a public instance
@@ -43,10 +45,25 @@ expanded from the environment (`.env`): see `ibcmon.example.yaml` and
 `.env.example`. Ethereum addresses come from the `eth.addresses` block or from
 gno-eth-ibc's `contracts/deployments/<chain>.json` (`eth.deployment_file`).
 
+A guardian instance needs a **second provider per chain** (`gno.rpc_url_2`,
+`eth.rpc_url_2`): header agreement fails closed, and a snapshot the second
+provider cannot confirm is served as `unverified` and never flagged on
+(design §3.3). The start-up refuses a chain without one unless
+`instance.require_cross_check: false` is set, which only the local e2e target
+does.
+
 Against the local testnet and anvil of gno-eth-ibc (`scripts/e2e-local.sh`
 there): set `eth.finality: depth:1` (anvil has no beacon chain) and point
 `eth.deployment_file` at `contracts/deployments/local.json`; `make e2e` runs
-every check once against it.
+every check once against it, with anvil as its own second provider and the
+cross-check requirement off (it says so in its output).
+
+Live meter levels are shown only when an exact source gives them; today the
+realm exposes the stored level and the console says "live: unavailable" and
+why (design §4.1, §15 P3). Secrets in RPC and webhook URLs are redacted at
+the source before anything is stored, logged or served; a public instance
+additionally drops node labels, error texts and worker logs from every
+response (design §10.2).
 
 ## Layout
 

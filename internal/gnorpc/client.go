@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 )
 
 // Client talks to one tm2 RPC endpoint over HTTP.
@@ -76,7 +78,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("gnorpc %s: %w", method, err)
+		return redact.Errorf("gnorpc %s: %w", method, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
@@ -84,14 +86,14 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gnorpc %s: http %d: %s", method, resp.StatusCode, truncate(raw))
+		return redact.Errorf("gnorpc %s: http %d: %s", method, resp.StatusCode, truncate(raw))
 	}
 	var r rpcResponse
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return fmt.Errorf("gnorpc %s: decode: %w", method, err)
 	}
 	if r.Error != nil {
-		return fmt.Errorf("gnorpc %s: %s (%s)", method, r.Error.Message, r.Error.Data)
+		return redact.Errorf("gnorpc %s: %s (%s)", method, r.Error.Message, r.Error.Data)
 	}
 	return json.Unmarshal(r.Result, out)
 }

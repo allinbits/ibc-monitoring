@@ -9,12 +9,15 @@ type Meter struct {
 	// At is the unix time of the stored level.
 	At    int64 `json:"at"`
 	Epoch int64 `json:"epoch,omitempty"`
-	// Live is the level refilled to the time the snapshot was taken, and
-	// LiveSource says how it was obtained: "reader" (the realm's
-	// Reader.Meters) or "client" (recomputed here from the refill rule).
+	// Live is the level refilled to the snapshot time, present only when an
+	// exact source gave it (the realm's Reader.Meters); LiveSource is then
+	// "reader". Otherwise Live is nil, LiveSource is "unavailable" and
+	// LiveReason says why: Meter.Refill depends on the payouts-epoch reset,
+	// the fractional remainder and the stored rate and ceiling, none of
+	// which the JSON shows, so it is never recomputed here (design §4.1).
 	Live       *Amount `json:"live,omitempty"`
-	LiveSource string  `json:"live_source,omitempty"`
-	Cap        *Amount `json:"cap,omitempty"`
+	LiveSource string  `json:"live_source"`
+	LiveReason string  `json:"live_reason,omitempty"`
 }
 
 // Totals mirrors the controls' per-denom totals.
@@ -56,13 +59,23 @@ type Denom struct {
 	SendMin        Amount `json:"send_min"`
 	RefundCap      Amount `json:"refund_cap"`
 	Remote         string `json:"remote"`
-	Meter          Meter  `json:"meter"`
-	RefundMeter    Meter  `json:"refund_meter"`
-	Waiting        int64  `json:"waiting"`
-	QueuedRefunds  int64  `json:"queued_refunds"`
-	Totals         Totals `json:"totals"`
-	// Lock is the route's escrow of the denom (total_escrow), 0 for mint.
-	Lock *Amount `json:"lock,omitempty"`
+	// Token is the denom's ERC20 on Ethereum: Remote for an unescrow denom;
+	// for a minted denom the base of its denom trace (denoms/ibc/<hash>),
+	// since Remote is empty there by the realm's rule (design §4.1).
+	Token string `json:"token"`
+	// Trace is the minted denom's trace path (transfer/<client>), checked to
+	// name a client of the route; empty for unescrow.
+	Trace         string `json:"trace,omitempty"`
+	Meter         Meter  `json:"meter"`
+	RefundMeter   Meter  `json:"refund_meter"`
+	Waiting       int64  `json:"waiting"`
+	QueuedRefunds int64  `json:"queued_refunds"`
+	Totals        Totals `json:"totals"`
+	// Lock is the realm's escrow accounting of the denom for this route
+	// (total_escrow), 0 for mint. The realm emits it through float64, so it
+	// is exact only below 2^53 (LockExact); it is never an identity term.
+	Lock      *Amount `json:"lock,omitempty"`
+	LockExact bool    `json:"lock_exact"`
 }
 
 // Route is a gno.land Ethereum route as the transfer realm reports it.

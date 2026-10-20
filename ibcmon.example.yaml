@@ -6,10 +6,14 @@ instance:
   public: false          # true: read-only public mode with the non-authoritative banner
   listen: ":8080"
   history: 500           # results kept per check
+  # Header agreement fails closed (docs/design.md §3.3): every chain needs a
+  # second provider, or the start-up is refused. Only the local e2e target
+  # sets this to false.
+  require_cross_check: true
 
 gno:
   rpc_url: ${IBCMON_GNO_RPC_URL}
-  rpc_url_2: ${IBCMON_GNO_RPC_URL_2}   # second provider, block-hash cross-check only
+  rpc_url_2: ${IBCMON_GNO_RPC_URL_2}   # second provider: header agreement, and value agreement for integrity reads
   name: own-gno-node
   pkgpaths:
     core: gno.land/r/aib/ibc/core

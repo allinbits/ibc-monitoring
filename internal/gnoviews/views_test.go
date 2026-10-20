@@ -97,16 +97,21 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("denoms %d", len(r.Denoms))
 	}
 	ugnot := r.Denoms[0]
-	if ugnot.Kind != "unescrow" || ugnot.Lock == nil || ugnot.Lock.String() != "200000000000" {
+	if ugnot.Kind != "unescrow" || ugnot.Lock == nil || ugnot.Lock.String() != "200000000000" || !ugnot.LockExact {
 		t.Fatalf("ugnot lock: %+v", ugnot.Lock)
 	}
-	// cap = max(10_000 GNOT, lock/10 = 20_000 GNOT) = 20_000 GNOT.
-	if ugnot.Meter.Cap.String() != "20000000000" {
-		t.Fatalf("cap %s", ugnot.Meter.Cap)
+	if ugnot.Token != "0x4ed7c70f96b99c776995fb64377f0d4ab3b0e1c1" || ugnot.Trace != "" {
+		t.Fatalf("ugnot token: %q %q", ugnot.Token, ugnot.Trace)
 	}
-	// stored 4_000 GNOT at 1776686400; now is 2026-10-20T12:00:00Z = 1792612800 → capped at the cap.
-	if ugnot.Meter.Live.String() != "20000000000" || ugnot.Meter.LiveSource != "client" {
-		t.Fatalf("live %s (%s)", ugnot.Meter.Live, ugnot.Meter.LiveSource)
+	// The stored level is shown; the live level is never recomputed here.
+	if ugnot.Meter.Level.String() != "4000000000" || ugnot.Meter.At != 1776686400 || ugnot.Meter.Epoch != 1 {
+		t.Fatalf("stored meter %+v", ugnot.Meter)
+	}
+	if ugnot.Meter.Live != nil || ugnot.Meter.LiveSource != "unavailable" || ugnot.Meter.LiveReason == "" {
+		t.Fatalf("live meter must be unavailable: %+v", ugnot.Meter)
+	}
+	if ugnot.RefundMeter.Live != nil || ugnot.RefundMeter.LiveSource != "unavailable" {
+		t.Fatalf("live refund meter must be unavailable: %+v", ugnot.RefundMeter)
 	}
 	if ugnot.Totals.InFlight.String() != "2000000000" || ugnot.Totals.Owed.String() != "1000000000" || ugnot.Waiting != 1 {
 		t.Fatalf("totals %+v", ugnot.Totals)
@@ -115,8 +120,13 @@ func TestRoutes(t *testing.T) {
 	if mint.Kind != "mint" || mint.SupplyCap.String() != "9000000000000000000" || mint.QueuedRefunds != 2 {
 		t.Fatalf("mint: %+v", mint)
 	}
-	if mint.Meter.Cap.String() != "500000000" || mint.Lock.String() != "0" {
-		t.Fatalf("mint cap %s lock %s", mint.Meter.Cap, mint.Lock)
+	// A minted denom has no remote: its token is the trace base, lower-cased,
+	// over a hop of the route.
+	if mint.Remote != "" || mint.Token != "0xdac17f958d2ee523a2206206994597c13d831ec7" || mint.Trace != "transfer/ethereum-1" {
+		t.Fatalf("mint token: %+v", mint)
+	}
+	if mint.Lock.String() != "0" || !mint.LockExact {
+		t.Fatalf("mint lock %s", mint.Lock)
 	}
 	if len(srv.Unknown) != 0 {
 		t.Fatalf("queries missing from the fixture: %v", srv.Unknown)
@@ -126,33 +136,38 @@ func TestRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sends) != 1 || sends[0].Key != "ethereum-1/00000000000000000001" || sends[0].Amount.String() != "2000000000" || sends[0].Outcome != "" {
+	if len(sends) != 3 || sends[0].Key != "ethereum-1/00000000000000000001" || sends[0].Amount.String() != "2000000000" || sends[0].Outcome != "" {
 		t.Fatalf("sends %+v", sends)
+	}
+	// Payloads are kept whole: records 1 and 2 differ only in the payload
+	// value, and each commitment is checked against its own packet.
+	if len(sends[0].Packet.Payloads) != 1 || string(sends[0].Packet.Payloads[0].Value) != "\x00" || string(sends[1].Packet.Payloads[0].Value) != "\x01" {
+		t.Fatalf("payloads %+v %+v", sends[0].Packet.Payloads, sends[1].Packet.Payloads)
+	}
+	if sends[0].Packet.Payloads[0].Encoding != "application/x-solidity-abi" || !sends[0].IsTransfer {
+		t.Fatalf("payload fields %+v", sends[0].Packet.Payloads[0])
+	}
+	if !sends[0].CommitmentOK || !sends[1].CommitmentOK || sends[0].Commitment == sends[1].Commitment {
+		t.Fatalf("commitments: %v %v", sends[0].CommitmentOK, sends[1].CommitmentOK)
+	}
+	// Record 3 carries record 1's commitment with record 2's payload: not a
+	// usable witness.
+	if sends[2].CommitmentOK {
+		t.Fatal("a commitment that does not match its packet must not verify")
 	}
 }
 
-func TestLiveLevel(t *testing.T) {
-	cap := model.MustAmount("86400")
-	at := int64(1000)
-	// 100 seconds later: +100 (cap/86400 per second).
-	got := LiveLevel(model.MustAmount("10"), at, time.Unix(1100, 0), cap)
-	if got.String() != "110" {
-		t.Fatalf("got %s", got)
+func TestDenomTraceRefusals(t *testing.T) {
+	v, pin, srv := devnet(t)
+	// A trace over a client outside the route is refused.
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"0xdac17f958d2ee523a2206206994597c13d831ec7","path":"transfer/other-9","denom":"ibc/ABCDEF"}`)
+	if _, err := v.Routes(context.Background(), pin); err == nil {
+		t.Fatal("expected an error for a foreign hop")
 	}
-	// Never above the cap.
-	got = LiveLevel(model.MustAmount("10"), at, time.Unix(at+200000, 0), cap)
-	if got.String() != "86400" {
-		t.Fatalf("got %s", got)
-	}
-	// A stored level above a lowered cap is cut to it; no backdating.
-	got = LiveLevel(model.MustAmount("100000"), at, time.Unix(at, 0), cap)
-	if got.String() != "86400" {
-		t.Fatalf("got %s", got)
-	}
-	// Clock behind the stored time: no refill.
-	got = LiveLevel(model.MustAmount("10"), at, time.Unix(at-5, 0), cap)
-	if got.String() != "10" {
-		t.Fatalf("got %s", got)
+	// A base that is not an address is refused.
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"uatom","path":"transfer/ethereum-1","denom":"ibc/ABCDEF"}`)
+	if _, err := v.Routes(context.Background(), pin); err == nil {
+		t.Fatal("expected an error for a non-address base")
 	}
 }
 

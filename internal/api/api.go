@@ -49,7 +49,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/v1/health", s.health)
-	m.HandleFunc("GET /api/v1/info", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, s.Info) })
+	m.HandleFunc("GET /api/v1/info", func(w http.ResponseWriter, _ *http.Request) { s.writeJSON(w, s.Info) })
 	m.HandleFunc("GET /api/v1/overview", s.overview)
 	m.HandleFunc("GET /api/v1/clients", s.clients)
 	m.HandleFunc("GET /api/v1/routes", s.routes)
@@ -64,7 +64,12 @@ func (s *Server) Handler() http.Handler {
 	return m
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+// writeJSON encodes v; on a public instance every response goes through the
+// central filter first (docs/design.md §10.2).
+func (s *Server) writeJSON(w http.ResponseWriter, v any) {
+	if s.Info.Public {
+		v = publicFilter(v)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	enc := json.NewEncoder(w)
@@ -77,13 +82,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	status := "starting"
 	if ok {
 		status = "ok"
-		// The collector reports a chain it could not read in its pins; the
-		// health answer says so without exposing the error text.
+		// The collector reports each chain's state in its pins; the health
+		// answer says "degraded" without the error text.
 		if b, err := json.Marshal(pins.Value); err == nil && (strings.Contains(string(b), `"gno_error":"`) || strings.Contains(string(b), `"eth_error":"`)) {
 			status = "degraded"
 		}
 	}
-	writeJSON(w, map[string]any{"status": status, "time": time.Now().UTC()})
+	s.writeJSON(w, map[string]any{"status": status, "time": time.Now().UTC()})
 }
 
 // Overview is the console's landing data.
@@ -108,7 +113,7 @@ func (s *Server) overview(w http.ResponseWriter, _ *http.Request) {
 		Alarms: s.Store.Alarms(false),
 		Checks: s.Store.LatestResults(),
 	}
-	writeJSON(w, o)
+	s.writeJSON(w, o)
 }
 
 func values(snaps []store.Snapshot) []any {
@@ -120,7 +125,7 @@ func values(snaps []store.Snapshot) []any {
 }
 
 func (s *Server) clients(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, map[string]any{
+	s.writeJSON(w, map[string]any{
 		"gno":      values(s.Store.Snapshots(store.KindGnoClients)),
 		"ethereum": values(s.Store.Snapshots(store.KindEthClients)),
 	})
@@ -145,17 +150,17 @@ func (s *Server) routes(w http.ResponseWriter, _ *http.Request) {
 	if out == nil {
 		out = []RouteView{}
 	}
-	writeJSON(w, out)
+	s.writeJSON(w, out)
 }
 
 func (s *Server) governance(w http.ResponseWriter, _ *http.Request) {
 	g, _ := s.Store.Snapshot(store.KindGnoGovernance, "ibcgov")
 	e, _ := s.Store.Snapshot(store.KindEthGovernance, "ibcadmin")
-	writeJSON(w, map[string]any{"gno": g.Value, "ethereum": e.Value})
+	s.writeJSON(w, map[string]any{"gno": g.Value, "ethereum": e.Value})
 }
 
 func (s *Server) checks(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, s.Store.LatestResults())
+	s.writeJSON(w, s.Store.LatestResults())
 }
 
 func (s *Server) checkHistory(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +168,12 @@ func (s *Server) checkHistory(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 100
 	}
-	writeJSON(w, s.Store.ResultHistory(r.PathValue("name"), limit))
+	s.writeJSON(w, s.Store.ResultHistory(r.PathValue("name"), limit))
 }
 
 func (s *Server) alarms(w http.ResponseWriter, r *http.Request) {
 	all := r.URL.Query().Get("all") == "true"
-	writeJSON(w, s.Store.Alarms(all))
+	s.writeJSON(w, s.Store.Alarms(all))
 }
 
 func (s *Server) alarmEvents(w http.ResponseWriter, r *http.Request) {
@@ -176,15 +181,15 @@ func (s *Server) alarmEvents(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 100
 	}
-	writeJSON(w, s.Store.AlarmEvents(limit))
+	s.writeJSON(w, s.Store.AlarmEvents(limit))
 }
 
 func (s *Server) jobs(w http.ResponseWriter, _ *http.Request) {
 	if s.Jobs == nil {
-		writeJSON(w, []any{})
+		s.writeJSON(w, []any{})
 		return
 	}
-	writeJSON(w, s.Jobs())
+	s.writeJSON(w, s.Jobs())
 }
 
 // console serves the embedded build with an SPA fallback to index.html. With

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/allinbits/ibc-monitoring/internal/model"
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 )
 
 // LogSink writes alarm transitions to the structured log.
@@ -77,7 +78,7 @@ func (s WebhookSink) Send(ctx context.Context, e model.AlarmEvent) error {
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			last = err
+			last = redact.Error(err)
 			continue
 		}
 		_ = resp.Body.Close()

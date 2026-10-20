@@ -21,6 +21,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 )
 
 // Finality says how the pinned block is chosen.
@@ -63,7 +65,7 @@ type Client struct {
 func Dial(ctx context.Context, url, name string, fin Finality) (*Client, error) {
 	rc, err := rpc.DialContext(ctx, url)
 	if err != nil {
-		return nil, fmt.Errorf("ethrpc %s: %w", name, err)
+		return nil, redactErr(fmt.Errorf("ethrpc %s: %w", name, err))
 	}
 	return &Client{rpc: rc, eth: ethclient.NewClient(rc), geth: gethclient.New(rc), name: name, finality: fin, LogChunk: 2000}, nil
 }
@@ -94,7 +96,7 @@ type rawHeader struct {
 func (c *Client) header(ctx context.Context, tag string) (Block, error) {
 	var h *rawHeader
 	if err := c.rpc.CallContext(ctx, &h, "eth_getBlockByNumber", tag, false); err != nil {
-		return Block{}, fmt.Errorf("ethrpc %s: eth_getBlockByNumber %s: %w", c.name, tag, err)
+		return Block{}, redactErr(fmt.Errorf("ethrpc %s: eth_getBlockByNumber %s: %w", c.name, tag, err))
 	}
 	if h == nil {
 		return Block{}, fmt.Errorf("ethrpc %s: block %s not found", c.name, tag)
@@ -139,7 +141,7 @@ func (c *Client) BlockByNumber(ctx context.Context, n uint64) (Block, error) {
 func (c *Client) BlockByHash(ctx context.Context, h common.Hash) (Block, error) {
 	var raw *rawHeader
 	if err := c.rpc.CallContext(ctx, &raw, "eth_getBlockByHash", h, false); err != nil {
-		return Block{}, fmt.Errorf("ethrpc %s: eth_getBlockByHash: %w", c.name, err)
+		return Block{}, redactErr(fmt.Errorf("ethrpc %s: eth_getBlockByHash: %w", c.name, err))
 	}
 	if raw == nil {
 		return Block{}, fmt.Errorf("ethrpc %s: block %s not found", c.name, h)
@@ -189,7 +191,7 @@ func (c *Client) Call(ctx context.Context, to common.Address, a *gethabi.ABI, me
 				return nil, &ErrRevert{Method: method, Reason: reason, Data: b}
 			}
 		}
-		return nil, fmt.Errorf("ethrpc %s: %s: %w", c.name, method, err)
+		return nil, redactErr(fmt.Errorf("ethrpc %s: %s: %w", c.name, method, err))
 	}
 	if len(out) == 0 && len(m.Outputs) > 0 {
 		return nil, fmt.Errorf("ethrpc %s: %s at %s returned no data (no code at the address?)", c.name, method, to)
@@ -230,37 +232,16 @@ func (c *Client) Logs(ctx context.Context, addr common.Address, topics [][]commo
 		}
 		logs, err := c.eth.FilterLogs(ctx, filterQuery(addr, topics, start, end))
 		if err != nil {
-			return nil, fmt.Errorf("ethrpc %s: eth_getLogs %d-%d: %w", c.name, start, end, err)
+			return nil, redactErr(fmt.Errorf("ethrpc %s: eth_getLogs %d-%d: %w", c.name, start, end, err))
 		}
 		out = append(out, logs...)
 	}
 	return out, nil
 }
 
-// StorageProof is one slot's proven value.
-type StorageProof struct {
-	Key   common.Hash
-	Value *big.Int
-	Proof []string
-}
-
-// Proof reads eth_getProof of slots at block. Verification against the
-// block's state root is the caller's (phase 3, docs/design.md §7.4).
-func (c *Client) Proof(ctx context.Context, addr common.Address, slots []common.Hash, block uint64) (common.Hash, []StorageProof, error) {
-	keys := make([]string, len(slots))
-	for i, s := range slots {
-		keys[i] = s.Hex()
-	}
-	res, err := c.geth.GetProof(ctx, addr, keys, new(big.Int).SetUint64(block))
-	if err != nil {
-		return common.Hash{}, nil, fmt.Errorf("ethrpc %s: eth_getProof: %w", c.name, err)
-	}
-	out := make([]StorageProof, len(res.StorageProof))
-	for i, sp := range res.StorageProof {
-		out[i] = StorageProof{Key: common.HexToHash(sp.Key), Value: sp.Value, Proof: sp.Proof}
-	}
-	return res.StorageHash, out, nil
-}
+// redactErr strips secrets (URLs with tokens) from an RPC error before it
+// leaves this package (docs/design.md §10.2).
+func redactErr(err error) error { return redact.Error(err) }
 
 // Now is the wall clock used for provenance; replaceable in tests.
 var Now = time.Now

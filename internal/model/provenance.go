@@ -42,4 +42,21 @@ type Provenance struct {
 	// Finality is "finalized" (Ethereum, beacon or tag), "committed"
 	// (gno.land) or "depth:N" (local networks without finality).
 	Finality string `json:"finality,omitempty"`
+	// StateVerification says whether the value itself was authenticated
+	// against the header (docs/design.md §3.3): "proof" (a verified
+	// eth_getProof or store proof), "agreed" (equal from both providers) or
+	// "none" (asserted by one provider).
+	StateVerification StateVerification `json:"state_verification"`
+	// Collection is the collector run this value came from; the API marks a
+	// snapshot older than the latest collection of its chain as stale.
+	Collection uint64 `json:"collection,omitempty"`
 }
+
+// StateVerification levels.
+type StateVerification string
+
+const (
+	StateNone   StateVerification = "none"
+	StateAgreed StateVerification = "agreed"
+	StateProof  StateVerification = "proof"
+)

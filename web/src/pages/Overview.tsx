@@ -1,7 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type Alarm, type CheckResult, type Pins } from "../api";
+import { api, type Alarm, type ChainState, type CheckResult, type Pins } from "../api";
 import { Empty, Loading, Pill, Provenance, statusKind } from "../components";
 import { iso, unix } from "../time";
+
+function ChainError({ state, error }: { state?: ChainState; error?: string }) {
+  return (
+    <p className="error">
+      collection failed
+      {state?.consecutive_failures ? ` ${state.consecutive_failures}× in a row` : ""}
+      {error ? `: ${error}` : ""}
+      {state?.last_success && (
+        <span className="muted small">
+          {" "}
+          · last success {iso(state.last_success)}; the snapshots below are stale
+        </span>
+      )}
+    </p>
+  );
+}
 
 function PinsCard({ pins }: { pins: Pins | null }) {
   if (!pins) return <Empty what="collection" />;
@@ -9,8 +25,8 @@ function PinsCard({ pins }: { pins: Pins | null }) {
     <div className="grid2">
       <div className="card">
         <h3>gno.land</h3>
-        {pins.gno_error ? (
-          <p className="error">{pins.gno_error}</p>
+        {!pins.gno_state?.ok ? (
+          <ChainError state={pins.gno_state} error={pins.gno_error} />
         ) : (
           <dl>
             <dt>height</dt>
@@ -21,7 +37,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
             </dd>
             <dt>time</dt>
             <dd>{iso(pins.gno.Time)}</dd>
-            <dt>verification</dt>
+            <dt>header agreement</dt>
             <dd>
               <Pill kind={pins.gno_verification === "unverified" ? "bad" : "ok"}>
                 {pins.gno_verification}
@@ -33,8 +49,8 @@ function PinsCard({ pins }: { pins: Pins | null }) {
       </div>
       <div className="card">
         <h3>Ethereum</h3>
-        {pins.eth_error ? (
-          <p className="error">{pins.eth_error}</p>
+        {!pins.eth_state?.ok ? (
+          <ChainError state={pins.eth_state} error={pins.eth_error} />
         ) : (
           <dl>
             <dt>block</dt>
@@ -47,7 +63,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
             </dd>
             <dt>time</dt>
             <dd>{unix(pins.eth.Timestamp)}</dd>
-            <dt>verification</dt>
+            <dt>header agreement</dt>
             <dd>
               <Pill kind={pins.eth_verification === "unverified" ? "bad" : "ok"}>
                 {pins.eth_verification}

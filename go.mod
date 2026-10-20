@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/ethereum/go-ethereum v1.17.8
+	github.com/holiman/uint256 v1.3.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -31,7 +32,6 @@ require (
 	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
-	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect

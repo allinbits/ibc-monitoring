@@ -20,8 +20,8 @@ func TestAPI(t *testing.T) {
 	st.PutSnapshot(store.Snapshot{Kind: store.KindGnoRoutes, Key: r.Key, Value: r})
 	st.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: r.Key, Value: model.EthRoute{RouteKey: "client-0"}})
 	st.PutResult(model.CheckResult{Check: "client_expiry", Status: model.CheckOK, Findings: []model.Finding{}})
-	st.PutAlarm(model.Alarm{Key: "a", State: model.AlarmRaised, Title: "<script>alert(1)</script>"})
-	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now()}}).Handler())
+	st.PutAlarm(model.Alarm{Key: "a", State: model.AlarmRaised, Title: "<script>alert(1)</script>", Detail: "node own-gno-node said connection refused"})
+	srv := httptest.NewServer((&Server{Store: st, Info: Info{Version: "test", Public: true, StartedAt: time.Now(), GnoNode: "own-gno-node", EthNode: "own-eth-node"}}).Handler())
 	defer srv.Close()
 
 	get := func(path string) (int, string) {
@@ -73,6 +73,35 @@ func TestAPI(t *testing.T) {
 	code, body = get("/api/v1/info")
 	if code != 200 || !strings.Contains(body, `"public":true`) {
 		t.Fatalf("info %d %s", code, body)
+	}
+	// Public mode: the node label and any error text never reach a visitor,
+	// on any endpoint (the filter is central).
+	if strings.Contains(body, "own-gno-node") {
+		t.Fatalf("public info leaks the node label: %s", body)
+	}
+	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: map[string]any{
+		"gno_error":       `Post "http://127.0.0.1:1": connection refused`,
+		"gno_cross_check": "second provider unavailable: dial tcp 10.0.0.9:26657",
+		"gno_state":       map[string]any{"ok": false, "error": "secret-ish text", "consecutive_failures": 3},
+	}})
+	for _, path := range []string{"/api/v1/overview", "/api/v1/alarms", "/api/v1/alarms/events", "/api/v1/checks", "/api/v1/clients", "/api/v1/routes", "/api/v1/governance", "/api/v1/worker/jobs"} {
+		code, body = get(path)
+		if code != 200 {
+			t.Fatalf("%s: %d", path, code)
+		}
+		for _, leak := range []string{"127.0.0.1", "connection refused", "secret-ish", "10.0.0.9", "own-gno-node", "consecutive_failures"} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("%s leaks %q: %s", path, leak, body)
+			}
+		}
+	}
+	_, body = get("/api/v1/overview")
+	if !strings.Contains(body, `"gno_error":"unavailable"`) || !strings.Contains(body, `"error":"unavailable"`) {
+		t.Fatalf("overview must say unavailable: %s", body)
+	}
+	code, body = get("/api/v1/health")
+	if code != 200 || !strings.Contains(body, "degraded") {
+		t.Fatalf("health %d %s", code, body)
 	}
 	code, body = get("/api/v1/worker/jobs")
 	if code != 200 || strings.TrimSpace(body) != "[]" {

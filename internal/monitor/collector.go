@@ -13,55 +13,113 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/ethviews"
 	"github.com/allinbits/ibc-monitoring/internal/gnoviews"
 	"github.com/allinbits/ibc-monitoring/internal/model"
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 	"github.com/allinbits/ibc-monitoring/internal/store"
 )
 
 // Collector reads both chains into the store. Each collection pins one
-// height per chain, cross-checks its hash against the second provider and
-// stamps every snapshot with that verification (docs/design.md §3.2).
+// height per chain, checks its hash against the second provider (header
+// agreement, docs/design.md §3.3) and stamps every snapshot with that
+// verification and the collection it came from. It fails closed: a second
+// provider that is configured but cannot answer, or no second provider on an
+// instance that requires one, leaves the snapshot unverified.
 type Collector struct {
 	Gno  *gnoviews.Views
-	Gno2 *gnoviews.Views // optional second provider for the hash cross-check
+	Gno2 *gnoviews.Views // second provider for the header cross-check
 	Eth  *ethviews.Views
-	Eth2 *ethrpc.Client // optional second provider
-	// EthVerification is the primary endpoint's level: "provider" or
-	// "light-client" when it is a Helios endpoint.
+	Eth2 *ethrpc.Client // second provider
+	// RequireCrossCheck refuses `provider`-level verification: without a
+	// second provider every snapshot is unverified (guardian instances).
+	RequireCrossCheck bool
+	// EthVerification is the primary endpoint's level when it is a light
+	// client ("light-client"); otherwise "provider".
 	EthVerification model.Verification
 	Store           store.Store
 	Log             *slog.Logger
+
+	collection uint64
+	gnoState   ChainState
+	ethState   ChainState
 }
 
-// Pins are the heights a collection was read at.
+// ChainState is one chain's collection readiness (docs/design.md §7.11).
+type ChainState struct {
+	// OK is true when the latest collection read the chain without error.
+	OK bool `json:"ok"`
+	// Error is the latest collection's error, redacted ("" when OK).
+	Error string `json:"error,omitempty"`
+	// ConsecutiveFailures counts collections that failed in a row.
+	ConsecutiveFailures int       `json:"consecutive_failures"`
+	LastSuccess         time.Time `json:"last_success,omitempty"`
+	// LastCollection is the collection id of the latest successful read;
+	// snapshots carrying an older id are stale.
+	LastCollection uint64 `json:"last_collection"`
+}
+
+// Pins are the heights a collection was read at and each chain's state.
 type Pins struct {
+	Collection    uint64             `json:"collection"`
+	CollectedAt   time.Time          `json:"collected_at"`
 	Gno           gnoviews.Pin       `json:"gno"`
 	GnoVerified   model.Verification `json:"gno_verification"`
+	GnoCrossCheck string             `json:"gno_cross_check,omitempty"`
+	GnoState      ChainState         `json:"gno_state"`
 	Eth           ethrpc.Block       `json:"eth"`
 	EthVerified   model.Verification `json:"eth_verification"`
-	CollectedAt   time.Time          `json:"collected_at"`
-	GnoError      string             `json:"gno_error,omitempty"`
-	EthError      string             `json:"eth_error,omitempty"`
-	GnoCrossCheck string             `json:"gno_cross_check,omitempty"`
 	EthCrossCheck string             `json:"eth_cross_check,omitempty"`
+	EthState      ChainState         `json:"eth_state"`
+	// GnoError and EthError repeat the states' errors for the dashboard.
+	GnoError string `json:"gno_error,omitempty"`
+	EthError string `json:"eth_error,omitempty"`
+}
+
+// Fresh reports whether a snapshot of chain is from that chain's latest
+// successful collection.
+func (p Pins) Fresh(chain model.Chain, prov model.Provenance) bool {
+	switch chain {
+	case model.ChainGno:
+		return p.GnoState.OK && prov.Collection == p.GnoState.LastCollection
+	case model.ChainEthereum:
+		return p.EthState.OK && prov.Collection == p.EthState.LastCollection
+	}
+	return false
 }
 
 // Collect reads every view once. A failure on one chain does not prevent the
-// other chain's snapshots; both errors are reported in the pins snapshot.
+// other chain's snapshots; both states are reported in the pins snapshot.
 func (c *Collector) Collect(ctx context.Context) Pins {
-	pins := Pins{CollectedAt: time.Now()}
+	c.collection++
+	pins := Pins{Collection: c.collection, CollectedAt: time.Now()}
 	if c.Gno != nil {
-		if err := c.collectGno(ctx, &pins); err != nil {
-			pins.GnoError = err.Error()
-			c.log().Error("gno collection failed", "err", err)
+		err := c.collectGno(ctx, &pins)
+		c.gnoState = c.gnoState.update(err, c.collection, pins.CollectedAt)
+		if err != nil {
+			c.log().Error("gno collection failed", "err", c.gnoState.Error)
 		}
 	}
+	pins.GnoState = c.gnoState
+	pins.GnoError = c.gnoState.Error
 	if c.Eth != nil {
-		if err := c.collectEth(ctx, &pins); err != nil {
-			pins.EthError = err.Error()
-			c.log().Error("ethereum collection failed", "err", err)
+		err := c.collectEth(ctx, &pins)
+		c.ethState = c.ethState.update(err, c.collection, pins.CollectedAt)
+		if err != nil {
+			c.log().Error("ethereum collection failed", "err", c.ethState.Error)
 		}
 	}
+	pins.EthState = c.ethState
+	pins.EthError = c.ethState.Error
 	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: pins})
 	return pins
+}
+
+func (s ChainState) update(err error, collection uint64, at time.Time) ChainState {
+	if err != nil {
+		s.OK = false
+		s.Error = redact.String(err.Error())
+		s.ConsecutiveFailures++
+		return s
+	}
+	return ChainState{OK: true, LastSuccess: at, LastCollection: collection}
 }
 
 func (c *Collector) log() *slog.Logger {
@@ -71,32 +129,56 @@ func (c *Collector) log() *slog.Logger {
 	return c.Log
 }
 
+// verification applies the fail-closed rule to a header cross-check.
+func (c *Collector) verification(primary model.Verification, hasSecond bool, secondErr error, agree bool, mismatch string) (model.Verification, string) {
+	switch {
+	case !hasSecond && c.RequireCrossCheck:
+		return model.VerificationUnverified, "no second provider configured; instance.require_cross_check is on"
+	case !hasSecond:
+		return primary, "no second provider configured"
+	case secondErr != nil:
+		return model.VerificationUnverified, "second provider unavailable: " + redact.String(secondErr.Error())
+	case !agree:
+		return model.VerificationUnverified, mismatch
+	case primary == model.VerificationLightClient:
+		return primary, "agreed"
+	default:
+		return model.VerificationCrossChecked, "agreed"
+	}
+}
+
 func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 	pin, err := c.Gno.LatestPin(ctx)
 	if err != nil {
 		return err
 	}
 	pins.Gno = pin
-	pins.GnoVerified = model.VerificationProvider
+	var otherErr error
+	agree := false
+	mismatch := ""
 	if c.Gno2 != nil {
-		other, err := c.Gno2.PinAt(ctx, pin.Height)
-		switch {
-		case err != nil:
-			pins.GnoCrossCheck = "second provider unavailable: " + err.Error()
-		case !strings.EqualFold(other.BlockHash, pin.BlockHash):
-			pins.GnoVerified = model.VerificationUnverified
-			pins.GnoCrossCheck = fmt.Sprintf("hash mismatch at %d: %s vs %s", pin.Height, pin.BlockHash, other.BlockHash)
-		default:
-			pins.GnoVerified = model.VerificationCrossChecked
-			pins.GnoCrossCheck = "agreed"
+		var other gnoviews.Pin
+		other, otherErr = c.Gno2.PinAt(ctx, pin.Height)
+		if otherErr == nil {
+			agree = strings.EqualFold(other.BlockHash, pin.BlockHash)
+			if !agree {
+				mismatch = fmt.Sprintf("hash mismatch at %d: %s vs %s", pin.Height, pin.BlockHash, other.BlockHash)
+			}
 		}
+	}
+	pins.GnoVerified, pins.GnoCrossCheck = c.verification(model.VerificationProvider, c.Gno2 != nil, otherErr, agree, mismatch)
+
+	stamp := func(p *model.Provenance) {
+		p.Verification = pins.GnoVerified
+		p.Collection = c.collection
+		p.StateVerification = model.StateNone
 	}
 	clients, err := c.Gno.Clients(ctx, pin)
 	if err != nil {
 		return err
 	}
 	for _, cl := range clients {
-		cl.Provenance.Verification = pins.GnoVerified
+		stamp(&cl.Provenance)
 		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoClients, Key: cl.ID, Value: cl, Provenance: cl.Provenance})
 	}
 	routes, err := c.Gno.Routes(ctx, pin)
@@ -105,7 +187,7 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 	}
 	keys := make([]string, 0, len(routes))
 	for _, r := range routes {
-		r.Provenance.Verification = pins.GnoVerified
+		stamp(&r.Provenance)
 		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoRoutes, Key: r.Key, Value: r, Provenance: r.Provenance})
 		keys = append(keys, r.Key)
 	}
@@ -113,7 +195,7 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins) error {
 	if err != nil {
 		return err
 	}
-	gov.Provenance.Verification = pins.GnoVerified
+	stamp(&gov.Provenance)
 	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindGnoGovernance, Key: "ibcgov", Value: gov, Provenance: gov.Provenance})
 	return nil
 }
@@ -124,49 +206,52 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins) error {
 		return err
 	}
 	pins.Eth = b
-	pins.EthVerified = c.EthVerification
-	if pins.EthVerified == "" {
-		pins.EthVerified = model.VerificationProvider
+	primary := c.EthVerification
+	if primary == "" {
+		primary = model.VerificationProvider
 	}
+	var otherErr error
+	agree := false
+	mismatch := ""
 	if c.Eth2 != nil {
-		other, err := c.Eth2.BlockByNumber(ctx, b.Number)
-		switch {
-		case err != nil:
-			pins.EthCrossCheck = "second provider unavailable: " + err.Error()
-		case other.Hash != b.Hash:
-			pins.EthVerified = model.VerificationUnverified
-			pins.EthCrossCheck = fmt.Sprintf("hash mismatch at %d: %s vs %s", b.Number, b.Hash, other.Hash)
-		default:
-			if pins.EthVerified == model.VerificationProvider {
-				pins.EthVerified = model.VerificationCrossChecked
+		var other ethrpc.Block
+		other, otherErr = c.Eth2.BlockByNumber(ctx, b.Number)
+		if otherErr == nil {
+			agree = other.Hash == b.Hash
+			if !agree {
+				mismatch = fmt.Sprintf("hash mismatch at %d: %s vs %s", b.Number, b.Hash, other.Hash)
 			}
-			pins.EthCrossCheck = "agreed"
 		}
+	}
+	pins.EthVerified, pins.EthCrossCheck = c.verification(primary, c.Eth2 != nil, otherErr, agree, mismatch)
+
+	stamp := func(p *model.Provenance) {
+		p.Verification = pins.EthVerified
+		p.Collection = c.collection
+		p.StateVerification = model.StateNone
 	}
 	addrs := c.Eth.Addresses()
 	gov, err := c.Eth.Governance(ctx, b)
 	if err != nil {
 		return err
 	}
-	gov.Provenance.Verification = pins.EthVerified
+	stamp(&gov.Provenance)
 	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthGovernance, Key: "ibcadmin", Value: gov, Provenance: gov.Provenance})
 
-	// The route's light client is the launch client, or whatever the route
-	// moved to: read the current client's verifier through the router? The
-	// router has no verifier getter per id in this layer yet, so the
-	// configured light-client address is read (TODO phase 2: resolve from
-	// ICS02ClientAdded/ICS02ClientMigrated logs).
+	// TODO(phase 2): resolve the route's verifier from ICS02ClientAdded /
+	// ICS02ClientMigrated logs instead of the configured address.
 	if addrs.LightClient != (common.Address{}) {
 		lc, err := c.Eth.LightClient(ctx, addrs.LightClient, gov.GovClient, "route", b)
 		if err != nil {
 			return err
 		}
-		lc.Provenance.Verification = pins.EthVerified
+		stamp(&lc.Provenance)
 		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthClients, Key: lc.Address, Value: lc, Provenance: lc.Provenance})
 	}
 
 	// One Ethereum route per gno route: its current client id is the gno
-	// client's counterparty; its retired ids the replaced clients'.
+	// client's counterparty; its retired ids the replaced clients'. The
+	// tokens are each denom's resolved Ethereum token (remote or trace base).
 	gnoClients := map[string]model.Client{}
 	for _, s := range c.Store.Snapshots(store.KindGnoClients) {
 		if cl, ok := s.Value.(model.Client); ok {
@@ -189,16 +274,22 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins) error {
 			}
 		}
 		var tokens []common.Address
+		seen := map[common.Address]bool{}
 		for _, d := range r.Denoms {
-			if common.IsHexAddress(d.Remote) {
-				tokens = append(tokens, common.HexToAddress(d.Remote))
+			if !common.IsHexAddress(d.Token) {
+				continue
+			}
+			a := common.HexToAddress(d.Token)
+			if !seen[a] {
+				seen[a] = true
+				tokens = append(tokens, a)
 			}
 		}
 		er, err := c.Eth.Route(ctx, cur.CounterpartyID, retired, tokens, b)
 		if err != nil {
 			return fmt.Errorf("ethereum route %s: %w", cur.CounterpartyID, err)
 		}
-		er.Provenance.Verification = pins.EthVerified
+		stamp(&er.Provenance)
 		c.Store.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: r.Key, Value: er, Provenance: er.Provenance})
 	}
 	return nil

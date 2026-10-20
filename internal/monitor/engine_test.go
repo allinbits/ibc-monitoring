@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,17 +21,43 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/store"
 )
 
-type recordingSink struct{ events []model.AlarmEvent }
+type recordingSink struct {
+	mu     sync.Mutex
+	events []model.AlarmEvent
+}
 
 func (*recordingSink) Name() string { return "test" }
 func (r *recordingSink) Send(_ context.Context, e model.AlarmEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, e)
 	return nil
 }
 
+// count waits (sinks deliver asynchronously) until n events arrived or a
+// deadline passes, and returns how many there are.
+func (r *recordingSink) count(n int) int {
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		r.mu.Lock()
+		got := len(r.events)
+		r.mu.Unlock()
+		if got >= n || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (r *recordingSink) first() model.AlarmEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.events[0]
+}
+
 // ethFixture is a minimal Ethereum deployment: IBCAdmin with no decisions, a
 // transfer app with one route and a light client whose head is `head`.
-func ethFixture(t *testing.T, head time.Time) (*ethviews.Views, *ethrpc.Client) {
+func ethFixture(t *testing.T, head time.Time) (*ethviews.Views, *ethrpc.Client, *ethrpctest.Server) {
 	t.Helper()
 	admin := common.HexToAddress("0xaaaa")
 	xfer := common.HexToAddress("0xbbbb")
@@ -144,7 +171,7 @@ func ethFixture(t *testing.T, head time.Time) (*ethviews.Views, *ethrpc.Client) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return v, c
+	return v, c, srv
 }
 
 func TestEngineEndToEnd(t *testing.T) {
@@ -158,12 +185,12 @@ func TestEngineEndToEnd(t *testing.T) {
 	gno2 := gnoviews.New(gnorpc.New(gsrv.URL, gnorpc.WithName("gno-second")), gnoviews.DefaultPaths)
 	// The GnoLightClient's head is 13.5 days old with a 14-day trusting
 	// period: inside the critical window.
-	eth, ethc := ethFixture(t, f.Time.Add(-14*24*time.Hour+6*time.Hour))
+	eth, ethc, _ := ethFixture(t, f.Time.Add(-14*24*time.Hour+6*time.Hour))
 
 	st := store.NewMemory(10)
 	sink := &recordingSink{}
 	eng := &Engine{
-		Collector: &Collector{Gno: gno, Gno2: gno2, Eth: eth, Eth2: ethc, Store: st},
+		Collector: &Collector{Gno: gno, Gno2: gno2, Eth: eth, Eth2: ethc, RequireCrossCheck: true, Store: st},
 		Checks:    []Check{ClientExpiry{Config: DefaultClientExpiryConfig()}},
 		Alerts:    alert.NewManager(st, nil, sink),
 		Store:     st,
@@ -204,13 +231,14 @@ func TestEngineEndToEnd(t *testing.T) {
 	if _, ok := keys["client_expiry/gno/ethereum-1"]; ok {
 		t.Fatalf("fresh client alarmed: %+v", keys)
 	}
-	if len(sink.events) != 2 {
-		t.Fatalf("sink events %d", len(sink.events))
+	if n := sink.count(2); n != 2 {
+		t.Fatalf("sink events %d", n)
 	}
 	// A second run changes nothing: no new transitions.
 	eng.RunOnce(context.Background())
-	if len(sink.events) != 2 {
-		t.Fatalf("duplicate transitions: %d", len(sink.events))
+	time.Sleep(50 * time.Millisecond)
+	if n := sink.count(3); n != 2 {
+		t.Fatalf("duplicate transitions: %d", n)
 	}
 }
 
@@ -221,12 +249,13 @@ func TestEngineDeferredAlarm(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		eng.RunOnce(context.Background())
 	}
-	if len(sink.events) != 0 {
-		t.Fatalf("alarmed too early: %+v", sink.events)
+	time.Sleep(50 * time.Millisecond)
+	if n := sink.count(1); n != 0 {
+		t.Fatalf("alarmed too early: %d", n)
 	}
 	eng.RunOnce(context.Background())
-	if len(sink.events) != 1 || sink.events[0].Alarm.Key != "client_expiry_unavailable" {
-		t.Fatalf("events %+v", sink.events)
+	if n := sink.count(1); n != 1 || sink.first().Alarm.Key != "client_expiry_unavailable" {
+		t.Fatalf("events %d", n)
 	}
 	r, _ := st.LatestResult("client_expiry")
 	if r.ConsecutiveSkips != 3 {

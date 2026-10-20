@@ -10,11 +10,14 @@ func TestParse(t *testing.T) {
 	env := map[string]string{"IBCMON_GNO_RPC_URL": "http://gno:26657", "IBCMON_WEBHOOK_URL": "https://hooks.example/x"}
 	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 	c, err := Parse([]byte(`
+instance:
+  require_cross_check: false
 gno:
   rpc_url: ${IBCMON_GNO_RPC_URL}
   rpc_url_2: ${IBCMON_GNO_RPC_URL_2}
 eth:
   rpc_url: http://eth:8545
+  rpc_url_2: http://eth2:8545
   finality: depth:5
 monitor:
   poll_interval: 3s
@@ -54,5 +57,13 @@ alerts:
 	// An empty file is a valid configuration of defaults.
 	if _, err := Parse([]byte(""), lookup); err != nil {
 		t.Fatalf("empty: %v", err)
+	}
+	// A chain without a second provider is refused unless the cross-check
+	// requirement is turned off explicitly (design §3.3).
+	if _, err := Parse([]byte("gno:\n  rpc_url: http://a\n"), lookup); err == nil || !strings.Contains(err.Error(), "rpc_url_2") {
+		t.Fatalf("single provider accepted: %v", err)
+	}
+	if c, err := Parse([]byte("instance:\n  require_cross_check: false\ngno:\n  rpc_url: http://a\n"), lookup); err != nil || c.Instance.CrossCheckRequired() {
+		t.Fatalf("explicit opt-out: %v", err)
 	}
 }

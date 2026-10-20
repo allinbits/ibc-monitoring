@@ -53,11 +53,18 @@ func TestClientExpiryRun(t *testing.T) {
 	st := store.NewMemory(10)
 	now := time.Now()
 	r := ClientExpiry{Config: DefaultClientExpiryConfig()}.Run(context.Background(), st, now)
-	if r.Status != model.CheckSkipped {
-		t.Fatalf("empty store: %s", r.Status)
+	if r.Status != model.CheckSkipped || r.Reason != "no collection yet" {
+		t.Fatalf("empty store: %+v", r)
+	}
+	// A collection that read both chains: snapshots of collection 1 are fresh.
+	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: Pins{Collection: 1, GnoState: ChainState{OK: true, LastCollection: 1}, EthState: ChainState{OK: true, LastCollection: 1}}})
+	r = ClientExpiry{Config: DefaultClientExpiryConfig()}.Run(context.Background(), st, now)
+	if r.Status != model.CheckSkipped || r.Reason != "no client snapshot yet" {
+		t.Fatalf("no clients: %+v", r)
 	}
 	ok := model.Client{Chain: model.ChainGno, ID: "a", Kind: model.ClientKindEthereum, Status: model.ClientActive, HeadTime: now, TrustingPeriod: time.Hour * 24 * 9, Expiry: now.Add(9 * 24 * time.Hour)}
 	bad := model.Client{Chain: model.ChainEthereum, ID: "client-0", Address: "0x1", Kind: model.ClientKindGnoLightClient, Status: model.ClientExpired, HeadTime: now.Add(-20 * 24 * time.Hour), TrustingPeriod: 14 * 24 * time.Hour, Expiry: now.Add(-6 * 24 * time.Hour)}
+	ok.Provenance.Collection, bad.Provenance.Collection = 1, 1
 	st.PutSnapshot(store.Snapshot{Kind: store.KindGnoClients, Key: "a", Value: ok, Provenance: ok.Provenance})
 	st.PutSnapshot(store.Snapshot{Kind: store.KindEthClients, Key: "0x1", Value: bad, Provenance: bad.Provenance})
 	r = ClientExpiry{Config: DefaultClientExpiryConfig()}.Run(context.Background(), st, now)

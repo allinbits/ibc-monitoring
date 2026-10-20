@@ -18,8 +18,20 @@ export function Provenance({ p }: { p: Prov | undefined }) {
   );
 }
 
-export function Pill({ kind, children }: { kind: string; children: React.ReactNode }) {
-  return <span className={`pill pill-${kind}`}>{children}</span>;
+export function Pill({
+  kind,
+  title,
+  children,
+}: {
+  kind: string;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={`pill pill-${kind}`} title={title}>
+      {children}
+    </span>
+  );
 }
 
 export function statusKind(status: string): string {

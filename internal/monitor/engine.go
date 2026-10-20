@@ -42,7 +42,9 @@ func (e *Engine) RunOnce(ctx context.Context) []model.CheckResult {
 	var results []model.CheckResult
 	for _, c := range e.Checks {
 		r := c.Run(ctx, e.Store, now)
-		if r.Status == model.CheckSkipped {
+		// A skip and an error both mean "not evaluated" for the deferred
+		// alarm (docs/design.md §8.3).
+		if r.Status == model.CheckSkipped || r.Status == model.CheckError {
 			e.skips[c.Name()]++
 		} else {
 			e.skips[c.Name()] = 0

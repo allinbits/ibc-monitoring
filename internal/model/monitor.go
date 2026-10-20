@@ -87,4 +87,8 @@ type AlarmEvent struct {
 	Type  string    `json:"type"` // raised | updated | cleared
 	At    time.Time `json:"at"`
 	Alarm Alarm     `json:"alarm"`
+	// AutoFlag is the auto-flag sink's eligibility for this transition
+	// (docs/design.md §8.1): true only on a raised or updated `break` alarm
+	// the check marked eligible; never on a clear.
+	AutoFlag bool `json:"autoflag"`
 }

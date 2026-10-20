@@ -22,12 +22,20 @@ BIN="${BIN:-$ROOT/bin/ibcmon}"
 
 CFG="$(mktemp -t ibcmon-e2e.XXXXXX.yaml)"
 trap 'rm -f "$CFG"' EXIT
+# The second providers are the testnet's other validator and anvil itself:
+# header agreement is exercised but not independent, and the cross-check
+# requirement is turned off for anvil (docs/design.md §13). Never run a
+# guardian instance this way.
+echo "e2e: local mode, header agreement is NOT independent (anvil is its own second provider)"
 cat > "$CFG" <<EOF
+instance:
+  require_cross_check: false
 gno:
   rpc_url: ${GNO_RPC:-http://127.0.0.1:26657}
   rpc_url_2: ${GNO_RPC_2:-http://127.0.0.1:26667}
 eth:
   rpc_url: ${ETH_RPC_URL:-http://127.0.0.1:8545}
+  rpc_url_2: ${ETH_RPC_URL:-http://127.0.0.1:8545}
   finality: depth:1
   deployment_file: $DEPLOYMENT
 EOF

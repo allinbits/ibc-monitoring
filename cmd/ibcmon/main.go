@@ -26,6 +26,7 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/gnoviews"
 	"github.com/allinbits/ibc-monitoring/internal/model"
 	"github.com/allinbits/ibc-monitoring/internal/monitor"
+	"github.com/allinbits/ibc-monitoring/internal/redact"
 	"github.com/allinbits/ibc-monitoring/internal/store"
 	"github.com/allinbits/ibc-monitoring/internal/worker"
 )
@@ -87,6 +88,13 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Every configured endpoint and secret is redacted wherever it would
+	// appear (docs/design.md §10.2).
+	redact.Register(cfg.Gno.RPCURL, cfg.Gno.RPCURL2, cfg.Eth.RPCURL, cfg.Eth.RPCURL2, cfg.Eth.BeaconURL)
+	for _, s := range cfg.Alerts.Sinks {
+		redact.Register(s.URL, s.Secret)
+	}
+	redact.Register(os.Getenv("IBCMON_GNO_WATCH_MNEMONIC"), os.Getenv("IBCMON_ETH_WATCH_PRIVATE_KEY"))
 	rt := &runtime{cfg: cfg, store: store.NewMemory(cfg.Instance.History), log: slog.Default()}
 	if cfg.Gno.RPCURL != "" {
 		paths := gnoviews.DefaultPaths
@@ -196,7 +204,7 @@ func loadAddresses(cfg *config.Config) (ethviews.Addresses, error) {
 }
 
 func (rt *runtime) collector() *monitor.Collector {
-	c := &monitor.Collector{Gno: rt.gno, Gno2: rt.gno2, Eth: rt.eth, Eth2: rt.eth2, Store: rt.store, Log: rt.log}
+	c := &monitor.Collector{Gno: rt.gno, Gno2: rt.gno2, Eth: rt.eth, Eth2: rt.eth2, RequireCrossCheck: rt.cfg.Instance.CrossCheckRequired(), Store: rt.store, Log: rt.log}
 	if rt.cfg.Eth.LightClient {
 		c.EthVerification = model.VerificationLightClient
 	}
@@ -259,7 +267,9 @@ func runServe(args []string, withMonitor, withWorker bool) error {
 		// watch's pending kind 5/6/7/9 decisions and recovery candidates.
 	}
 	if withMonitor {
-		eng := &monitor.Engine{Collector: rt.collector(), Checks: rt.checks(), Alerts: alert.NewManager(rt.store, rt.log, rt.sinks()...), Store: rt.store, Interval: rt.cfg.Monitor.PollInterval, DeferredAlarmFailures: rt.cfg.Monitor.DeferredAlarmFailures, Log: rt.log}
+		alerts := alert.NewManager(rt.store, rt.log, rt.sinks()...)
+		defer alerts.Close(5 * time.Second)
+		eng := &monitor.Engine{Collector: rt.collector(), Checks: rt.checks(), Alerts: alerts, Store: rt.store, Interval: rt.cfg.Monitor.PollInterval, DeferredAlarmFailures: rt.cfg.Monitor.DeferredAlarmFailures, Log: rt.log}
 		go eng.Run(ctx)
 	}
 	httpSrv := &http.Server{Addr: rt.cfg.Instance.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}

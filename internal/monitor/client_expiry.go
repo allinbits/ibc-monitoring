@@ -45,12 +45,23 @@ func (ClientExpiry) Name() string { return "client_expiry" }
 
 func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) model.CheckResult {
 	started := now
+	pins, ok := latestPins(st)
+	if !ok {
+		return Skip(c.Name(), started, "no collection yet")
+	}
 	var clients []model.Client
 	var prov []model.Provenance
+	var stale []string
 	for _, kind := range []string{store.KindGnoClients, store.KindEthClients} {
 		for _, s := range st.Snapshots(kind) {
 			cl, ok := s.Value.(model.Client)
 			if !ok {
+				continue
+			}
+			// Only subjects from their chain's latest successful collection
+			// are evaluated (docs/design.md §7.11); the rest are stale.
+			if !pins.Fresh(cl.Chain, s.Provenance) {
+				stale = append(stale, fmt.Sprintf("%s/%s", cl.Chain, clientLabel(cl)))
 				continue
 			}
 			clients = append(clients, cl)
@@ -58,13 +69,44 @@ func (c ClientExpiry) Run(_ context.Context, st store.Store, now time.Time) mode
 		}
 	}
 	if len(clients) == 0 {
+		if len(stale) > 0 {
+			return Skip(c.Name(), started, "every client snapshot is stale: "+collectionErrors(pins))
+		}
 		return Skip(c.Name(), started, "no client snapshot yet")
 	}
 	var findings []model.Finding
 	for _, cl := range clients {
 		findings = append(findings, c.evaluate(cl, now))
 	}
-	return Done(c.Name(), started, findings, prov)
+	r := Done(c.Name(), started, findings, prov)
+	if len(stale) > 0 {
+		r.Reason = fmt.Sprintf("%d stale subject(s) skipped (%s): %s", len(stale), strings.Join(stale, ", "), collectionErrors(pins))
+	}
+	return r
+}
+
+// latestPins reads the latest collection's pins.
+func latestPins(st store.Store) (Pins, bool) {
+	s, ok := st.Snapshot(store.KindPins, "latest")
+	if !ok {
+		return Pins{}, false
+	}
+	p, ok := s.Value.(Pins)
+	return p, ok
+}
+
+func collectionErrors(p Pins) string {
+	var parts []string
+	if !p.GnoState.OK {
+		parts = append(parts, "gno: "+p.GnoState.Error)
+	}
+	if !p.EthState.OK {
+		parts = append(parts, "ethereum: "+p.EthState.Error)
+	}
+	if len(parts) == 0 {
+		return "collection ok"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (c ClientExpiry) evaluate(cl model.Client, now time.Time) model.Finding {

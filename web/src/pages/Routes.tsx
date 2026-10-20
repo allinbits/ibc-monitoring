@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type Denom, type EthRoute, type GnoRoute, type RouteView } from "../api";
+import { api, type Denom, type EthRoute, type GnoRoute, type Meter, type RouteView } from "../api";
 import { decimalsOf, formatAmount, percent } from "../amount";
 import { Empty, Id, Loading, Pill, Provenance } from "../components";
 import { iso, unix } from "../time";
@@ -25,6 +25,35 @@ function MeterBar({ level, cap }: { level?: string; cap?: string }) {
   );
 }
 
+/** A gno.land meter: the stored level, and the live level only from an exact source. */
+function GnoMeter({ m, denom, cap }: { m: Meter; denom: string; cap?: string }) {
+  return (
+    <>
+      <div>
+        stored <Amt v={m.level} denom={denom} />{" "}
+        <span className="muted small">at {unix(m.at)}</span>
+      </div>
+      <div>
+        live{" "}
+        {m.live !== undefined ? (
+          <>
+            <Amt v={m.live} denom={denom} /> <span className="muted small">({m.live_source})</span>
+          </>
+        ) : (
+          <span className="muted" title={m.live_reason}>
+            unavailable
+          </span>
+        )}
+      </div>
+      {cap && (
+        <div className="muted small">
+          cap <Amt v={cap} denom={denom} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function DenomRow({ d }: { d: Denom }) {
   const t = d.totals;
   return (
@@ -33,30 +62,18 @@ function DenomRow({ d }: { d: Denom }) {
         <strong>{d.denom}</strong>
         <div className="muted small">{d.kind}</div>
         <div className="small">
-          <Id v={d.remote} />
+          token <Id v={d.token} />
         </div>
+        {d.trace && <div className="muted small">{d.trace}</div>}
       </td>
       <td>
-        <div>
-          stored <Amt v={d.meter.level} denom={d.denom} />
-        </div>
-        <div>
-          live <Amt v={d.meter.live} denom={d.denom} />{" "}
-          <span className="muted small">({d.meter.live_source})</span>
-        </div>
-        <div>
-          cap <Amt v={d.meter.cap} denom={d.denom} />{" "}
-          <MeterBar level={d.meter.live} cap={d.meter.cap} />
-        </div>
+        <GnoMeter m={d.meter} denom={d.denom} />
         <div className="muted small">
-          at {unix(d.meter.at)} · epoch {d.meter.epoch ?? 0}
+          cap floor <Amt v={d.cap_floor} denom={d.denom} /> · epoch {d.meter.epoch ?? 0}
         </div>
       </td>
       <td>
-        <div>
-          live <Amt v={d.refund_meter.live} denom={d.denom} /> / cap{" "}
-          <Amt v={d.refund_cap} denom={d.denom} />
-        </div>
+        <GnoMeter m={d.refund_meter} denom={d.denom} cap={d.refund_cap} />
         <div className="muted small">
           {d.queued_refunds} queued · <Amt v={t.queued_refunds} denom={d.denom} /> · parked{" "}
           <Amt v={t.parked} denom={d.denom} />
@@ -64,7 +81,12 @@ function DenomRow({ d }: { d: Denom }) {
       </td>
       <td>
         <div>
-          lock <Amt v={d.lock} denom={d.denom} />
+          escrow accounting <Amt v={d.lock} denom={d.denom} />{" "}
+          {!d.lock_exact && (
+            <Pill kind="warn" title="float64 on chain: exact only below 2^53">
+              inexact
+            </Pill>
+          )}
         </div>
         <div className="muted small">
           supply cap <Amt v={d.supply_cap} denom={d.denom} /> · outstanding{" "}
@@ -100,7 +122,7 @@ function DenomRow({ d }: { d: Denom }) {
       </td>
       <td>
         <div className="muted small">
-          cap floor <Amt v={d.cap_floor} denom={d.denom} /> · fee <Amt v={d.fee} denom={d.denom} />
+          fee <Amt v={d.fee} denom={d.denom} /> (floor <Amt v={d.fee_floor} denom={d.denom} />)
         </div>
         <div className="muted small">
           send <Amt v={d.send_min} denom={d.denom} />–<Amt v={d.send_max} denom={d.denom} />
@@ -166,7 +188,6 @@ function GnoSide({ r }: { r: GnoRoute }) {
 }
 
 function EthSide({ e }: { e: EthRoute }) {
-  const holdEnd = (h?: { start: number }) => (h ? unix(h.start + 86400) : null);
   return (
     <div className="card">
       <h4>
@@ -206,14 +227,16 @@ function EthSide({ e }: { e: EthRoute }) {
           ))}
           {e.route_hold && (
             <div>
-              <Pill kind="bad">route hold</Pill> since {unix(e.route_hold.start)}; ends 24 h below
-              two guardian flags ({holdEnd(e.route_hold)} at the earliest)
+              <Pill kind="bad">route hold</Pill> since {unix(e.route_hold.start)}; ends 24 h after
+              the guardian flags dip below two (the dip time is not exposed on chain), at once on a
+              key replacement
             </div>
           )}
           {e.refunds_hold && (
             <div>
               <Pill kind="bad">refunds hold</Pill> since {unix(e.refunds_hold.start)}; ends 24 h
-              below two guardian flags ({holdEnd(e.refunds_hold)} at the earliest)
+              after the guardian flags dip below two (the dip time is not exposed on chain), at once
+              on a key replacement
             </div>
           )}
         </dd>

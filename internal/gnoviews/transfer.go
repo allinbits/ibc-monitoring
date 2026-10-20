@@ -2,11 +2,14 @@ package gnoviews
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
+	"github.com/allinbits/ibc-monitoring/internal/ibcpacket"
 	"github.com/allinbits/ibc-monitoring/internal/model"
 )
 
@@ -53,6 +56,8 @@ type denomJSON struct {
 	Totals         map[string]json.Number `json:"totals"`
 }
 
+// totalEscrowJSON is the transfer v0 total_escrow/<denom> document. Its
+// amounts are built from float64 on chain (design §4.1): exact below 2^53.
 type totalEscrowJSON struct {
 	Denom   string      `json:"denom"`
 	Amount  json.Number `json:"amount"`
@@ -62,9 +67,24 @@ type totalEscrowJSON struct {
 	} `json:"clients"`
 }
 
-// Routes reads every Ethereum route of the transfer realm, with the lock of
-// each unescrow denom and the live meter level computed from the refill rule
-// (the realm only stores the level at the last refill; docs/design.md §4.1).
+// denomTraceJSON is denoms/ibc/<hash>: {base, path, denom}.
+type denomTraceJSON struct {
+	Base  string `json:"base"`
+	Path  string `json:"path"`
+	Denom string `json:"denom"`
+}
+
+// MeterLiveUnavailable is the reason the live level is not computed here.
+const MeterLiveUnavailable = "no exact source: the realm's refill depends on the payouts-epoch reset, the fractional remainder and the stored rate and ceiling (design §4.1)"
+
+// float64Exact is the largest integer a float64-built JSON number can carry
+// exactly (2^53).
+var float64Exact = new(big.Int).Lsh(big.NewInt(1), 53)
+
+// Routes reads every Ethereum route of the transfer realm with each denom's
+// Ethereum token resolved (the remote address for an unescrow denom, the
+// trace base for a minted one) and the stored meter levels; live levels are
+// marked unavailable (no exact source, design §4.1).
 func (v *Views) Routes(ctx context.Context, p Pin) ([]model.Route, error) {
 	var rjs []routeJSON
 	if err := v.renderJSON(ctx, v.paths.Transfer, "routes", p, &rjs); err != nil {
@@ -121,22 +141,29 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 	if r.Unresolved, err = amount(rj.Unresolved); err != nil {
 		return r, err
 	}
+	routeClients := append([]string{rj.Client}, rj.Replaced...)
 	for _, dj := range rj.Denoms {
 		d, err := parseDenom(dj)
 		if err != nil {
 			return r, fmt.Errorf("route %s denom %s: %w", rj.Route, dj.Denom, err)
 		}
-		if d.Kind == "unescrow" {
-			lock, err := v.lock(ctx, rj.Route, d.Denom, p)
+		switch d.Kind {
+		case "unescrow":
+			d.Token = strings.ToLower(d.Remote)
+			lock, exact, err := v.lock(ctx, rj.Route, d.Denom, p)
 			if err != nil {
 				return r, err
 			}
-			d.Lock = &lock
-		} else {
+			d.Lock, d.LockExact = &lock, exact
+		case "mint":
+			token, trace, err := v.denomTrace(ctx, d.Denom, routeClients, p)
+			if err != nil {
+				return r, fmt.Errorf("route %s denom %s: %w", rj.Route, dj.Denom, err)
+			}
+			d.Token, d.Trace = token, trace
 			zero := model.AmountFromInt64(0)
-			d.Lock = &zero
+			d.Lock, d.LockExact = &zero, true
 		}
-		fillLiveMeters(&d, p.Time)
 		r.Denoms = append(r.Denoms, d)
 	}
 	if r.Denoms == nil {
@@ -152,18 +179,63 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// lock reads the route's escrow of a denom from total_escrow/<denom>.
-func (v *Views) lock(ctx context.Context, route, denom string, p Pin) (model.Amount, error) {
+// lock reads the route's escrow accounting of a denom from
+// total_escrow/<denom> and says whether the value is below the float64 limit.
+func (v *Views) lock(ctx context.Context, route, denom string, p Pin) (model.Amount, bool, error) {
 	var te totalEscrowJSON
 	if err := v.renderJSON(ctx, v.paths.Transfer, "total_escrow/"+denom, p, &te); err != nil {
-		return model.Amount{}, err
+		return model.Amount{}, false, err
 	}
 	for _, c := range te.Clients {
-		if c.Client == route {
-			return amount(c.Amount)
+		if c.Client != route {
+			continue
+		}
+		a, err := amount(c.Amount)
+		if err != nil {
+			return model.Amount{}, false, err
+		}
+		return a, a.Int().Cmp(float64Exact) < 0, nil
+	}
+	return model.AmountFromInt64(0), true, nil
+}
+
+// denomTrace resolves a minted denom (ibc/<hash>) to its Ethereum token: the
+// trace base, which must be a hex address, over a path naming one of the
+// route's clients (transfer/<client>).
+func (v *Views) denomTrace(ctx context.Context, denom string, routeClients []string, p Pin) (token, path string, err error) {
+	hash, ok := strings.CutPrefix(denom, "ibc/")
+	if !ok {
+		return "", "", fmt.Errorf("minted denom %q is not an ibc/<hash> voucher", denom)
+	}
+	var dt denomTraceJSON
+	if err := v.renderJSON(ctx, v.paths.Transfer, "denoms/ibc/"+hash, p, &dt); err != nil {
+		return "", "", err
+	}
+	if dt.Denom != denom {
+		return "", "", fmt.Errorf("denom trace answers %q for %q", dt.Denom, denom)
+	}
+	base := strings.ToLower(dt.Base)
+	if !isHexAddress(base) {
+		return "", "", fmt.Errorf("denom trace base %q is not an Ethereum address", dt.Base)
+	}
+	client, ok := strings.CutPrefix(dt.Path, "transfer/")
+	if !ok || strings.Contains(client, "/") {
+		return "", "", fmt.Errorf("denom trace path %q is not a single transfer hop", dt.Path)
+	}
+	for _, c := range routeClients {
+		if c == client {
+			return base, dt.Path, nil
 		}
 	}
-	return model.AmountFromInt64(0), nil
+	return "", "", fmt.Errorf("denom trace path %q names a client outside the route", dt.Path)
+}
+
+func isHexAddress(s string) bool {
+	if len(s) != 42 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+	_, err := hex.DecodeString(s[2:])
+	return err == nil
 }
 
 func parseDenom(dj denomJSON) (model.Denom, error) {
@@ -212,8 +284,9 @@ func parseDenom(dj denomJSON) (model.Denom, error) {
 	return d, nil
 }
 
+// parseMeter reads the stored level and marks the live level unavailable.
 func parseMeter(mj meterJSON) (model.Meter, error) {
-	var m model.Meter
+	m := model.Meter{LiveSource: "unavailable", LiveReason: MeterLiveUnavailable}
 	var err error
 	if m.Level, err = amount(mj.Level); err != nil {
 		return m, err
@@ -225,57 +298,6 @@ func parseMeter(mj meterJSON) (model.Meter, error) {
 		return m, err
 	}
 	return m, nil
-}
-
-// DayCap is the bridge meter's cap: max(CapFloor, lock/10) for an unescrow
-// denom, CapFloor for a minted one (controls/v0 route.gno DayCap).
-func DayCap(d model.Denom) model.Amount {
-	if d.Kind != "unescrow" || d.Lock == nil {
-		return d.CapFloor
-	}
-	tenth := new(big.Int).Quo(d.Lock.Int(), big.NewInt(10))
-	if tenth.Cmp(d.CapFloor.Int()) > 0 {
-		return model.NewAmount(tenth)
-	}
-	return d.CapFloor
-}
-
-// LiveLevel refills a stored meter level to now: the bucket refills at
-// cap/86400 per second with ceiling cap (ADR §7.1), and the realm's stored
-// level is what it held at `at`. It never backdates a cap change: the stored
-// level stays and only the ceiling is the cap in force now.
-func LiveLevel(level model.Amount, at int64, now time.Time, cap model.Amount) model.Amount {
-	elapsed := now.Unix() - at
-	if elapsed <= 0 {
-		return capAt(level, cap)
-	}
-	refill := new(big.Int).Mul(cap.Int(), big.NewInt(elapsed))
-	refill.Quo(refill, big.NewInt(86400))
-	live := new(big.Int).Add(level.Int(), refill)
-	return capAt(model.NewAmount(live), cap)
-}
-
-func capAt(level, cap model.Amount) model.Amount {
-	if level.Cmp(cap) > 0 {
-		return cap
-	}
-	return level
-}
-
-// fillLiveMeters computes the live bridge and refund levels client-side and
-// labels them so the console shows the source. When the realm exposes
-// Reader.Meters (docs/design.md §15), the reader value replaces this.
-func fillLiveMeters(d *model.Denom, now time.Time) {
-	cap := DayCap(*d)
-	live := LiveLevel(d.Meter.Level, d.Meter.At, now, cap)
-	d.Meter.Live = &live
-	d.Meter.LiveSource = "client"
-	d.Meter.Cap = &cap
-	rcap := d.RefundCap
-	rlive := LiveLevel(d.RefundMeter.Level, d.RefundMeter.At, now, rcap)
-	d.RefundMeter.Live = &rlive
-	d.RefundMeter.LiveSource = "client"
-	d.RefundMeter.Cap = &rcap
 }
 
 // Page is one cursor page of a controls listing (claims, sweeps, sends,
@@ -300,15 +322,24 @@ func (v *Views) RoutePage(ctx context.Context, route, kind, cursor string, p Pin
 	return pg, nil
 }
 
-// SendRecord is one entry of routes/<route>/sends (SendJSON).
-type SendRecord struct {
-	Key    string `json:"key"`
-	Packet struct {
-		Sequence          json.Number `json:"sequence"`
-		SourceClient      string      `json:"source_client"`
-		DestinationClient string      `json:"destination_client"`
-		TimeoutTimestamp  json.Number `json:"timeout_timestamp"`
-	} `json:"packet"`
+// packetJSON is SendJSON's packet: the full packet with hex payload values.
+type packetJSON struct {
+	Sequence          json.Number `json:"sequence"`
+	SourceClient      string      `json:"source_client"`
+	DestinationClient string      `json:"destination_client"`
+	TimeoutTimestamp  json.Number `json:"timeout_timestamp"`
+	Payloads          []struct {
+		SourcePort      string `json:"source_port"`
+		DestinationPort string `json:"destination_port"`
+		Version         string `json:"version"`
+		Encoding        string `json:"encoding"`
+		Value           string `json:"value"`
+	} `json:"payloads"`
+}
+
+type sendJSON struct {
+	Key             string      `json:"key"`
+	Packet          packetJSON  `json:"packet"`
 	Commitment      string      `json:"commitment"`
 	Sender          string      `json:"sender"`
 	Receiver        string      `json:"receiver"`
@@ -332,6 +363,91 @@ type SendRecord struct {
 	Incident        string      `json:"incident"`
 }
 
+// SendRecord is one entry of routes/<route>/sends with the complete packet,
+// payloads included, and the record's commitment checked against it: a
+// record whose commitment is not CommitPacket(packet) is not a usable
+// witness (CommitmentOK false), whatever else it says.
+type SendRecord struct {
+	Key          string
+	Packet       ibcpacket.Packet
+	Commitment   [32]byte
+	CommitmentOK bool
+	IsTransfer   bool
+	Sender       string
+	Receiver     string
+	Denom        string
+	Kind         string
+	Amount       model.Amount
+	Fee          model.Amount
+	SentHeight   int64
+	SentAt       int64
+	Outcome      string
+	Processed    int64
+	ProcessedAt  int64
+	Payment      string
+	Refunded     model.Amount
+	Settlement   int64
+	Reservation  model.Amount
+	Proven       int64
+	ProvenAt     uint64
+	ProvenBy     string
+	ProvenGen    uint64
+	Incident     string
+}
+
+func parseSend(raw json.RawMessage) (SendRecord, error) {
+	var sj sendJSON
+	if err := json.Unmarshal(raw, &sj); err != nil {
+		return SendRecord{}, err
+	}
+	rec := SendRecord{Key: sj.Key, Sender: sj.Sender, Receiver: sj.Receiver, Denom: sj.Denom, Kind: sj.Kind, Outcome: sj.Outcome, Payment: sj.Payment, ProvenBy: sj.ProvenBy, Incident: sj.Incident}
+	var err error
+	if rec.Packet.Sequence, err = unum(sj.Packet.Sequence); err != nil {
+		return rec, err
+	}
+	rec.Packet.SourceClient, rec.Packet.DestinationClient = sj.Packet.SourceClient, sj.Packet.DestinationClient
+	if rec.Packet.TimeoutTimestamp, err = unum(sj.Packet.TimeoutTimestamp); err != nil {
+		return rec, err
+	}
+	for _, pl := range sj.Packet.Payloads {
+		val, err := hex.DecodeString(pl.Value)
+		if err != nil {
+			return rec, fmt.Errorf("payload value: %w", err)
+		}
+		rec.Packet.Payloads = append(rec.Packet.Payloads, ibcpacket.Payload{SourcePort: pl.SourcePort, DestinationPort: pl.DestinationPort, Version: pl.Version, Encoding: pl.Encoding, Value: val})
+	}
+	c, err := hex.DecodeString(sj.Commitment)
+	if err != nil || len(c) != 32 {
+		return rec, fmt.Errorf("commitment %q: not 32 hex bytes", sj.Commitment)
+	}
+	copy(rec.Commitment[:], c)
+	rec.CommitmentOK = ibcpacket.Commit(rec.Packet) == rec.Commitment
+	rec.IsTransfer = ibcpacket.IsTransfer(rec.Packet)
+	for _, f := range []struct {
+		dst *model.Amount
+		src json.Number
+	}{{&rec.Amount, sj.Amount}, {&rec.Fee, sj.Fee}, {&rec.Refunded, sj.Refunded}, {&rec.Reservation, sj.Reservation}} {
+		if *f.dst, err = amount(f.src); err != nil {
+			return rec, err
+		}
+	}
+	for _, f := range []struct {
+		dst *int64
+		src json.Number
+	}{{&rec.SentHeight, sj.SentHeight}, {&rec.SentAt, sj.SentAt}, {&rec.Processed, sj.ProcessedHeight}, {&rec.ProcessedAt, sj.ProcessedAt}, {&rec.Settlement, sj.Settlement}, {&rec.Proven, sj.Proven}} {
+		if *f.dst, err = num(f.src); err != nil {
+			return rec, err
+		}
+	}
+	if rec.ProvenAt, err = unum(sj.ProvenAt); err != nil {
+		return rec, err
+	}
+	if rec.ProvenGen, err = unum(sj.ProvenGen); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
 // Sends walks every page of a route's send records.
 func (v *Views) Sends(ctx context.Context, route string, p Pin) ([]SendRecord, error) {
 	var out []SendRecord
@@ -342,8 +458,8 @@ func (v *Views) Sends(ctx context.Context, route string, p Pin) ([]SendRecord, e
 			return nil, err
 		}
 		for _, e := range pg.Entries {
-			var rec SendRecord
-			if err := json.Unmarshal(e, &rec); err != nil {
+			rec, err := parseSend(e)
+			if err != nil {
 				return nil, fmt.Errorf("route %s send record: %w", route, err)
 			}
 			out = append(out, rec)

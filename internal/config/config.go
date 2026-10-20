@@ -32,6 +32,15 @@ type Instance struct {
 	DataDir string `yaml:"data_dir"`
 	// History is how many results per check the store keeps.
 	History int `yaml:"history"`
+	// RequireCrossCheck (default true) refuses a chain without a second
+	// provider: header agreement fails closed (design §3.3). Only the local
+	// e2e target turns it off.
+	RequireCrossCheck *bool `yaml:"require_cross_check"`
+}
+
+// CrossCheckRequired returns instance.require_cross_check (default true).
+func (i Instance) CrossCheckRequired() bool {
+	return i.RequireCrossCheck == nil || *i.RequireCrossCheck
 }
 
 type Gno struct {
@@ -178,6 +187,14 @@ func (c *Config) defaults() {
 func (c *Config) validate() error {
 	if c.AutoFlag.Enabled && c.Instance.Public {
 		return errors.New("config: autoflag cannot be enabled on a public instance")
+	}
+	if c.Instance.CrossCheckRequired() {
+		if c.Gno.RPCURL != "" && c.Gno.RPCURL2 == "" {
+			return errors.New("config: gno.rpc_url_2 is required (instance.require_cross_check is on; design §3.3)")
+		}
+		if c.Eth.RPCURL != "" && c.Eth.RPCURL2 == "" {
+			return errors.New("config: eth.rpc_url_2 is required (instance.require_cross_check is on; design §3.3)")
+		}
 	}
 	for _, s := range c.Alerts.Sinks {
 		switch s.Type {

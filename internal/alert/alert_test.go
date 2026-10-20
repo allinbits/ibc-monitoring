@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +18,39 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/store"
 )
 
-type recorder struct{ events []model.AlarmEvent }
+type recorder struct {
+	mu     sync.Mutex
+	events []model.AlarmEvent
+	delay  time.Duration
+}
 
 func (*recorder) Name() string { return "rec" }
 func (r *recorder) Send(_ context.Context, e model.AlarmEvent) error {
+	time.Sleep(r.delay)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.events = append(r.events, e)
+	return nil
+}
+
+func (r *recorder) list() []model.AlarmEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]model.AlarmEvent, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+func (r *recorder) wait(t *testing.T, n int) []model.AlarmEvent {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ev := r.list(); len(ev) >= n {
+			return ev
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("expected %d events, got %d", n, len(r.list()))
 	return nil
 }
 
@@ -32,19 +62,22 @@ func TestManagerTransitions(t *testing.T) {
 	st := store.NewMemory(10)
 	rec := &recorder{}
 	m := NewManager(st, nil, rec)
+	t.Cleanup(func() { m.Close(time.Second) })
 	now := time.Unix(1000, 0)
 	m.now = func() time.Time { return now }
 
 	f := model.Finding{Subject: "x", Severity: model.SeverityWarning, Title: "x warns", AlarmKey: "c/x"}
 	m.Apply(context.Background(), result(f))
-	if len(rec.events) != 1 || rec.events[0].Type != "raised" {
-		t.Fatalf("events %+v", rec.events)
+	ev := rec.wait(t, 1)
+	if ev[0].Type != "raised" {
+		t.Fatalf("events %+v", ev)
 	}
 	// Same finding again: no transition.
 	now = now.Add(time.Minute)
 	m.Apply(context.Background(), result(f))
-	if len(rec.events) != 1 {
-		t.Fatalf("duplicate: %+v", rec.events)
+	time.Sleep(20 * time.Millisecond)
+	if len(rec.list()) != 1 {
+		t.Fatalf("duplicate: %+v", rec.list())
 	}
 	a, _ := st.Alarm("c/x")
 	if !a.LastSeen.Equal(now) || !a.FirstSeen.Equal(time.Unix(1000, 0)) {
@@ -53,32 +86,104 @@ func TestManagerTransitions(t *testing.T) {
 	// Severity change: updated.
 	f.Severity, f.Title = model.SeverityCritical, "x is critical"
 	m.Apply(context.Background(), result(f))
-	if len(rec.events) != 2 || rec.events[1].Type != "updated" || rec.events[1].Alarm.Severity != model.SeverityCritical {
-		t.Fatalf("events %+v", rec.events)
+	ev = rec.wait(t, 2)
+	if ev[1].Type != "updated" || ev[1].Alarm.Severity != model.SeverityCritical {
+		t.Fatalf("events %+v", ev)
 	}
-	// A skipped result keeps the alarm.
+	// A skipped or errored result keeps the alarm.
 	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckSkipped})
-	if len(rec.events) != 2 {
-		t.Fatalf("skip cleared: %+v", rec.events)
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckError})
+	time.Sleep(20 * time.Millisecond)
+	if len(rec.list()) != 2 {
+		t.Fatalf("skip cleared: %+v", rec.list())
 	}
 	// The finding goes away: cleared.
 	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK})
-	if len(rec.events) != 3 || rec.events[2].Type != "cleared" {
-		t.Fatalf("events %+v", rec.events)
+	ev = rec.wait(t, 3)
+	if ev[2].Type != "cleared" {
+		t.Fatalf("events %+v", ev)
 	}
 	if len(st.Alarms(false)) != 0 || len(st.Alarms(true)) != 1 {
 		t.Fatal("cleared alarm listing")
 	}
 	// Raised again after a clear: a fresh alarm.
 	m.Apply(context.Background(), result(f))
-	if len(rec.events) != 4 || rec.events[3].Type != "raised" {
-		t.Fatalf("events %+v", rec.events)
+	ev = rec.wait(t, 4)
+	if ev[3].Type != "raised" {
+		t.Fatalf("events %+v", ev)
 	}
 	// Another check's alarms are untouched by this check's results.
 	st.PutAlarm(model.Alarm{Key: "d/y", Check: "d", State: model.AlarmRaised})
 	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK})
 	if a, _ := st.Alarm("d/y"); a.State != model.AlarmRaised {
 		t.Fatal("foreign alarm cleared")
+	}
+}
+
+// The auto-flag eligibility lives on the event: only raised/updated break
+// alarms carry it, never a clear (docs/design.md §8.1, review finding 10).
+func TestAutoFlagEligibilityOnEvents(t *testing.T) {
+	st := store.NewMemory(10)
+	rec := &recorder{}
+	m := NewManager(st, nil, rec)
+	t.Cleanup(func() { m.Close(time.Second) })
+
+	brk := model.Finding{Subject: "r", Severity: model.SeverityBreak, Title: "break", AlarmKey: "orphan/r", AutoFlag: true}
+	m.Apply(context.Background(), result(brk))
+	ev := rec.wait(t, 1)
+	if !ev[0].AutoFlag {
+		t.Fatal("a raised break must be eligible")
+	}
+	// A critical (not break) finding that claims eligibility is not.
+	crit := model.Finding{Subject: "s", Severity: model.SeverityCritical, Title: "crit", AlarmKey: "x/s", AutoFlag: true}
+	m.Apply(context.Background(), result(brk, crit))
+	ev = rec.wait(t, 2)
+	if ev[1].Alarm.Key != "x/s" || ev[1].AutoFlag {
+		t.Fatalf("critical must not be eligible: %+v", ev[1])
+	}
+	// Clearing both: neither clear event is eligible although the alarm's
+	// own flag is still set.
+	m.Apply(context.Background(), model.CheckResult{Check: "c", Status: model.CheckOK})
+	ev = rec.wait(t, 4)
+	for _, e := range ev[2:] {
+		if e.Type != "cleared" || e.AutoFlag {
+			t.Fatalf("cleared event eligible: %+v", e)
+		}
+		if e.Alarm.Key == "orphan/r" && !e.Alarm.AutoFlag {
+			t.Fatal("the alarm's own flag is historical and stays")
+		}
+	}
+	for _, e := range st.AlarmEvents(10) {
+		if e.Type == "cleared" && e.AutoFlag {
+			t.Fatal("stored cleared event eligible")
+		}
+	}
+}
+
+// A slow sink must not block Apply, and a full queue drops the oldest.
+func TestAsyncSinks(t *testing.T) {
+	st := store.NewMemory(10)
+	slow := &recorder{delay: 200 * time.Millisecond}
+	fast := &recorder{}
+	m := NewManager(st, nil, slow, fast)
+	t.Cleanup(func() { m.Close(time.Second) })
+	start := time.Now()
+	var findings []model.Finding
+	for i := 0; i < DefaultQueue+20; i++ {
+		findings = append(findings, model.Finding{Subject: "x", Severity: model.SeverityWarning, Title: "t", AlarmKey: "c/" + strconv.Itoa(i)})
+	}
+	m.Apply(context.Background(), result(findings...))
+	if el := time.Since(start); el > time.Second {
+		t.Fatalf("Apply blocked on the slow sink: %s", el)
+	}
+	// The fast sink gets everything; the slow one dropped some.
+	fast.wait(t, DefaultQueue+20)
+	if d := m.Dropped(); d[0] == 0 || d[1] != 0 {
+		t.Fatalf("dropped %v", d)
+	}
+	// Every alarm is in the store whatever the sinks did.
+	if n := len(st.Alarms(false)); n != DefaultQueue+20 {
+		t.Fatalf("alarms stored %d", n)
 	}
 }
 

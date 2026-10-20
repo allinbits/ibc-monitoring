@@ -41,9 +41,10 @@ export interface Meter {
   level: string;
   at: number;
   epoch?: number;
+  /** Present only when an exact source gave it (the realm's reader). */
   live?: string;
-  live_source?: string;
-  cap?: string;
+  live_source: "reader" | "unavailable";
+  live_reason?: string;
 }
 
 export interface Totals {
@@ -83,12 +84,17 @@ export interface Denom {
   send_min: string;
   refund_cap: string;
   remote: string;
+  /** The denom's ERC20: `remote` for unescrow, the trace base for mint. */
+  token: string;
+  trace?: string;
   meter: Meter;
   refund_meter: Meter;
   waiting: number;
   queued_refunds: number;
   totals: Totals;
+  /** The realm's escrow accounting (float64 on chain): exact only when lock_exact. */
   lock?: string;
+  lock_exact: boolean;
 }
 
 export interface GnoRoute {
@@ -336,11 +342,22 @@ export interface Info {
   worker: boolean;
 }
 
+export interface ChainState {
+  ok: boolean;
+  error?: string;
+  consecutive_failures?: number;
+  last_success?: string;
+  last_collection: number;
+}
+
 export interface Pins {
+  collection: number;
   gno: { Height: number; BlockHash: string; Time: string };
   gno_verification: Provenance["verification"];
+  gno_state: ChainState;
   eth: { Number: number; Hash: string; Timestamp: number; Finality: string };
   eth_verification: Provenance["verification"];
+  eth_state: ChainState;
   collected_at: string;
   gno_error?: string;
   eth_error?: string;
