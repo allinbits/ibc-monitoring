@@ -167,7 +167,9 @@ Two different things are verified, and the provenance names them apart:
   `next_validators_hash`, `last_block_id` — are read from both providers and compared one by one together with
   the block hash (recomputing tm2's amino-merkle header hash is phase 4, with the light-client walk). It does
   **not** authenticate the values read at that block: a compromised primary can still answer fabricated
-  `eth_call`, `Render` or log results.
+  `eth_call`, `Render` or log results. Nor does it authenticate that the block is **recent**: the freshness bounds
+  of §7.11 (head age, provider lag, progress), read against both providers' own heads, catch a primary that
+  keeps answering an old genuine block.
 - **State authentication** (`state_verification`): a value was proven against that header — an `eth_getProof`
   account proof verified against the header-agreed `stateRoot` and a storage proof verified against the
   account's storage root (`proof`); a gno.land store proof verified against the AppHash (`proof`, phase 4); or
@@ -399,7 +401,7 @@ fallback (calling a module's own address reverts `NotDelegated`). `IBCAdmin` is 
 
 | Read | Gives |
 |---|---|
-| `routeKey(clientId) string`, `currentClient(routeKey) string`, `isRetired(clientId) bool`, `getEscrow(routeKey) address` | aliases and the escrow address per route. The Ethereum route is **discovered on Ethereum**: `IBCAdmin.govClient()` → `routeKey` → `currentClient(routeKey)` at the Ethereum pin is the route's current client **there**, and its generations come from Ethereum's own history (`GnoRouteMigrated{old, new, routeKey}`, `isRetired`); gno.land's view of the same route (its client's `counterparty_client_id`, its `replaced` list) is compared with it **separately**, as the cross-chain `route_relationship` check, so a replacement or recovery Ethereum executed before gno.land processed its notice shows as a relationship mismatch, never as the old client attributed to a fresh Ethereum snapshot |
+| `routeKey(clientId) string`, `currentClient(routeKey) string`, `isRetired(clientId) bool`, `getEscrow(routeKey) address` | aliases and the escrow address per route. The Ethereum route is **discovered on Ethereum**: `IBCAdmin.govClient()` → `routeKey` → `currentClient(routeKey)` at the Ethereum pin is the route's current client **there**, and its generations come from Ethereum's own history (`GnoRouteMigrated{old, new, routeKey}`, `isRetired`); gno.land's view of the same route (its client's `counterparty_client_id`, its `replaced` list) is compared with it **separately**, as the cross-chain `route_relationship` check, so a replacement or recovery Ethereum executed before gno.land processed its notice shows as a relationship mismatch, never as the old client attributed to a fresh Ethereum snapshot. The console and the API serve that comparison **from the check's latest result** — a derived value with two dependencies, shown with **both provenances** and marked deferred whenever either bundle was not fresh at evaluation — never from a field cached at collection time, which a later gno.land collection could have superseded |
 | `routeClosed(c) bool`, `routeReopening(c) bool`, `routePaused(c) bool`, `refundsHeld(c) bool`, `recoveryBlocked(c) bool` | route state |
 | `routeFlags(c) Flag[6]`, `refundsFlags(c) Flag[6]` (`Flag{blockNumber, time}`, zero = not standing), `routeHold(c) Flag`, `refundsHold(c) Flag`, `guardianKeys() address[6]` | flags per seat and the two holds of the route. A hold view gives its **start**; it ends 24 h after the guardian flags **dipped** below two (`Guardians.hold`: `dipTime + grace`), or at once when a guardian flag that stood at the dip's start lost its seat (`lostInDip`: that seat's key was replaced) — and `dipTime` is not exposed. **The transfer app emits no hold-history event** (`HoldEnded` is `IBCAdmin`'s only), so a route hold's end is replayed from `GnoRouteFlagSet`/`GnoRouteFlagCleared` and `GnoGuardianKeysSet` with the seat generations: a flag stands only while its seat's key is the one that set it; the dip is the first moment fewer than two guardian flags stand; the end is the dip plus 24 h, or the replacement that removes a flag standing at the dip (a watch key's or an unrelated seat's replacement ends nothing). Where the event history does not reach back to the hold's start, the end is **unknown** and shown as such |
 | `limits(c, token) LimitsView{set, limits{maxPerMessage, dayCap, refundCap, sendMax, sendMin}, receiveLevel, refundLevel}` | per token limits and the **live** bucket levels |
@@ -1179,11 +1181,28 @@ the relationship) run whenever either chain publishes, over the latest bundle of
 The two chains collect **concurrently**, so
 a stalled provider on one chain never delays the other chain's checks.
 
+**A genuine head can still be an old one.** Header agreement authenticates the block the primary chose, not
+that it is recent: a compromised primary that keeps answering an old, genuine finalized block passes every
+cross-check, and everything after that block — a foreign decision, an upgrade — stays invisible while every
+collection "succeeds". So each collection keeps **both providers' independently reported heads** (gno.land:
+each node's latest height; Ethereum: each provider's own finalized head) in the pins, and the selected pin is
+**stale**, and its collection not fresh, when any explicit bound fails: **head age** — the pin's block time is
+older than `freshness.max_head_age` for the chain (defaults: gno.land 2 min, Ethereum 45 min, above finality's
+own lag); **provider lag** — the second provider's own head is more than `freshness.max_provider_lag` blocks
+past the selected pin (defaults 20 and 64: the primary is withholding); **progress** — the pin has not
+advanced for `freshness.head_stall_after` (default 10 min) while the chain collects without error. A stale pin
+counts per chain (`consecutive_stale`) and raises `head_stale/<chain>` (`critical`) after
+`deferred_alarm_failures` consecutive stale collections — a liveness finding: it fails readiness and is **never**
+eligible for auto-flagging, since lag alone proves no forgery; a stale head under which §7.7 finds a
+contradiction is contained by §7.7, not by this. The bounds are configuration, so a chain whose cadence differs
+(a devnet, a halted testnet) is tuned, not silenced.
+
 Every snapshot carries the collection it came from. A check evaluates only subjects whose snapshots are
-**fresh**: from the latest collection, whose chain collected without error **and** whose pin is header-agreed
+**fresh**: from the latest collection, whose chain collected without error, whose pin is header-agreed
 (`cross-checked` or `light-client`; an `unverified` collection is not fresh, since its values may be any
-provider's). Subjects whose chain failed or stayed unverified keep their last snapshot, marked `stale` in the
-API, and are **not evaluated**: the result lists them as `unevaluated`, and the alert manager **keeps their
+provider's) **and** whose pin is within the freshness bounds above. Subjects whose chain failed, stayed
+unverified or pinned a stale head keep their last snapshot, marked `stale` in the API, and are **not
+evaluated**: the result lists them as `unevaluated`, and the alert manager **keeps their
 alarms as they are** — an alarm is cleared only by an evaluation of its subject that no longer finds it. A check
 with nothing fresh is `skipped`; a check that errors counts like a skip (§8.3). Non-evaluation is also counted
 **per chain**: `collection_unavailable/<chain>` after `deferred_alarm_failures` consecutive failed collections
@@ -1233,7 +1252,11 @@ latest transition, never the whole burst) until the sink accepts it — independ
 since an unchanged finding produces none. Transition identities are **monotonic across reopenings**: an alarm
 raised anew after a clear starts a new **incident generation** and continues the transition count, pending
 entries are ordered by (generation, transition), and a resend carries the complete latest transition — type,
-time, eligibility and alarm together — never an older event's envelope around a newer alarm. While a sink's
+time, eligibility and alarm together — never an older event's envelope around a newer alarm. Each sink also
+keeps, per alarm key, the **latest transition enqueued** and a **delivered high-water mark**: an event that a
+later transition has superseded — still queued behind it, or retried after it was delivered — is **discarded**,
+never sent; so a raise that failed while its clear went through is dropped the moment the clear is delivered,
+and a receiver's replay filter never turns an obsolete retry into a permanent backlog. While a sink's
 pending set is non-empty the manager raises
 `sink_backlog/<sink>` (`warning`; `critical` past `sink_backlog_critical`, default 10 min), with the drop and
 failure counts, and clears it when the set drains; a sink that refuses every delivery for `sink_failing_after`
