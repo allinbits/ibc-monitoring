@@ -101,9 +101,10 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 		if cfg.Gno.PkgPaths.Core != "" {
 			paths = gnoviews.Paths{Core: cfg.Gno.PkgPaths.Core, Transfer: cfg.Gno.PkgPaths.Transfer, IBCGov: cfg.Gno.PkgPaths.IBCGov}
 		}
-		rt.gno = gnoviews.New(gnorpc.New(cfg.Gno.RPCURL, gnorpc.WithName(cfg.Gno.Name)), paths)
+		httpc := &http.Client{Timeout: cfg.Monitor.RequestTimeout}
+		rt.gno = gnoviews.New(gnorpc.New(cfg.Gno.RPCURL, gnorpc.WithName(cfg.Gno.Name), gnorpc.WithHTTPClient(httpc)), paths)
 		if cfg.Gno.RPCURL2 != "" {
-			rt.gno2 = gnoviews.New(gnorpc.New(cfg.Gno.RPCURL2, gnorpc.WithName(cfg.Gno.Name2)), paths)
+			rt.gno2 = gnoviews.New(gnorpc.New(cfg.Gno.RPCURL2, gnorpc.WithName(cfg.Gno.Name2), gnorpc.WithHTTPClient(httpc)), paths)
 		}
 	}
 	if cfg.Eth.RPCURL != "" {
@@ -111,7 +112,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 		if err != nil {
 			return nil, err
 		}
-		rt.ethc, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL, cfg.Eth.Name, fin)
+		rt.ethc, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL, cfg.Eth.Name, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +125,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 			return nil, err
 		}
 		if cfg.Eth.RPCURL2 != "" {
-			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin)
+			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
 			if err != nil {
 				return nil, err
 			}
@@ -204,7 +205,7 @@ func loadAddresses(cfg *config.Config) (ethviews.Addresses, error) {
 }
 
 func (rt *runtime) collector() *monitor.Collector {
-	c := &monitor.Collector{Gno: rt.gno, Gno2: rt.gno2, Eth: rt.eth, Eth2: rt.eth2, RequireCrossCheck: rt.cfg.Instance.CrossCheckRequired(), Store: rt.store, Log: rt.log}
+	c := &monitor.Collector{Gno: rt.gno, Gno2: rt.gno2, Eth: rt.eth, Eth2: rt.eth2, RequireCrossCheck: rt.cfg.Instance.CrossCheckRequired(), Store: rt.store, Log: rt.log, Timeout: rt.cfg.Monitor.CollectionTimeout}
 	if rt.cfg.Eth.LightClient {
 		c.EthVerification = model.VerificationLightClient
 	}

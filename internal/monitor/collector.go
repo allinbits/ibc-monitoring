@@ -2,8 +2,10 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -35,6 +37,10 @@ type Collector struct {
 	EthVerification model.Verification
 	Store           store.Store
 	Log             *slog.Logger
+	// Timeout bounds each chain's collection (docs/design.md §7.11): a
+	// collection past it is a failed collection for that chain. Zero leaves
+	// it unbounded (tests).
+	Timeout time.Duration
 
 	collection uint64
 	gnoState   ChainState
@@ -96,27 +102,42 @@ func (p Pins) State(chain model.Chain) ChainState {
 	return p.GnoState
 }
 
-// Collect reads every view once. A failure on one chain does not prevent the
-// other chain's snapshots; both states are reported in the pins snapshot.
+// Collect reads every view once. The two chains are collected concurrently,
+// each under its own deadline, so a failure or a stall on one chain neither
+// prevents nor delays the other chain's snapshots; both states are reported
+// in the pins snapshot. A collection that runs past Timeout is a failed
+// collection for that chain.
 func (c *Collector) Collect(ctx context.Context) Pins {
 	c.collection++
 	pins := Pins{Collection: c.collection, CollectedAt: time.Now()}
-	if c.Gno != nil {
-		err := c.collectGno(ctx, &pins)
-		c.gnoState = c.gnoState.update(err, verified(pins.GnoVerified), c.collection, pins.CollectedAt)
+	var wg sync.WaitGroup
+	run := func(chain string, collect func(context.Context) error, state *ChainState, verifiedOf func() model.Verification) {
+		defer wg.Done()
+		cctx, cancel := ctx, context.CancelFunc(func() {})
+		if c.Timeout > 0 {
+			cctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		}
+		defer cancel()
+		err := collect(cctx)
+		if err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			err = fmt.Errorf("collection timed out after %s: %w", c.Timeout, err)
+		}
+		*state = state.update(err, verified(verifiedOf()), c.collection, pins.CollectedAt)
 		if err != nil {
-			c.log().Error("gno collection failed", "err", c.gnoState.Error)
+			c.log().Error(chain+" collection failed", "err", state.Error)
 		}
 	}
+	if c.Gno != nil {
+		wg.Add(1)
+		go run("gno", func(cctx context.Context) error { return c.collectGno(cctx, &pins) }, &c.gnoState, func() model.Verification { return pins.GnoVerified })
+	}
+	if c.Eth != nil {
+		wg.Add(1)
+		go run("ethereum", func(cctx context.Context) error { return c.collectEth(cctx, &pins) }, &c.ethState, func() model.Verification { return pins.EthVerified })
+	}
+	wg.Wait()
 	pins.GnoState = c.gnoState
 	pins.GnoError = c.gnoState.Error
-	if c.Eth != nil {
-		err := c.collectEth(ctx, &pins)
-		c.ethState = c.ethState.update(err, verified(pins.EthVerified), c.collection, pins.CollectedAt)
-		if err != nil {
-			c.log().Error("ethereum collection failed", "err", c.ethState.Error)
-		}
-	}
 	pins.EthState = c.ethState
 	pins.EthError = c.ethState.Error
 	c.Store.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: pins})

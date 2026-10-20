@@ -81,7 +81,13 @@ type Eth struct {
 type Monitor struct {
 	PollInterval          time.Duration `yaml:"poll_interval"`
 	DeferredAlarmFailures int           `yaml:"deferred_alarm_failures"`
-	ClientExpiry          struct {
+	// RequestTimeout bounds every RPC request on both chains (default 20s);
+	// CollectionTimeout bounds each chain's collection (default 60s). A
+	// provider that never answers is a failed collection, never a stall
+	// (design §7.11).
+	RequestTimeout    time.Duration `yaml:"request_timeout"`
+	CollectionTimeout time.Duration `yaml:"collection_timeout"`
+	ClientExpiry      struct {
 		WarnBefore     time.Duration            `yaml:"warn_before"`
 		CriticalBefore time.Duration            `yaml:"critical_before"`
 		StaleAfter     map[string]time.Duration `yaml:"stale_after"`
@@ -166,6 +172,12 @@ func (c *Config) defaults() {
 	}
 	if c.Monitor.PollInterval == 0 {
 		c.Monitor.PollInterval = 10 * time.Second
+	}
+	if c.Monitor.RequestTimeout == 0 {
+		c.Monitor.RequestTimeout = 20 * time.Second
+	}
+	if c.Monitor.CollectionTimeout == 0 {
+		c.Monitor.CollectionTimeout = 60 * time.Second
 	}
 	if c.Monitor.DeferredAlarmFailures == 0 {
 		c.Monitor.DeferredAlarmFailures = 6

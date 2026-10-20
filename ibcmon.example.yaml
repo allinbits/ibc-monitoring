@@ -39,6 +39,8 @@ eth:
 monitor:
   poll_interval: 10s
   deferred_alarm_failures: 6
+  request_timeout: 20s      # every RPC request, both chains
+  collection_timeout: 60s   # each chain's collection; past it, a failed collection
   client_expiry:
     warn_before: 72h
     critical_before: 12h

@@ -10,6 +10,7 @@ import (
 
 	"github.com/allinbits/ibc-monitoring/internal/gnorpc"
 	"github.com/allinbits/ibc-monitoring/internal/gnorpc/gnorpctest"
+	"github.com/allinbits/ibc-monitoring/internal/gnotx"
 	"github.com/allinbits/ibc-monitoring/internal/ibcpacket"
 )
 
@@ -50,9 +51,24 @@ func TestPacketEventsProofHeights(t *testing.T) {
 	// tx 3: two ethrelay.RecvPacket invocations of packet 7 (the second a
 	// no-op): ambiguous as well.
 	twice := append(append([]byte(nil), relayTx...), relayTx...)
+	// tx 4: a MsgCall to a wrapper realm (which can cross-call the core and
+	// receive packet 7 itself) followed by the ethrelay no-op: deferred
+	// (review finding 7).
+	msgCall := func(pkg, fn string, args ...string) []byte {
+		body := append(pbField(1, []byte("g1caller")), pbField(4, []byte(pkg))...)
+		body = append(body, pbField(5, []byte(fn))...)
+		for _, a := range args {
+			body = append(body, pbField(6, []byte(a))...)
+		}
+		return pbField(1, anyMsg(gnotx.MsgCallType, body))
+	}
+	wrapperThenRelay := append(msgCall("gno.land/r/someone/wrapper", "Relay", "x"), relayTx...)
+	// tx 5: an ethrelay.UpdateClient (proven unable to emit a packet event)
+	// followed by the receive: an honest relay transaction, resolved.
+	updateThenRelay := append(msgCall(EthRelayPath, "UpdateClient", "ethereum-1", "AAAA"), relayTx...)
 	f.Blocks = map[string]gnorpctest.BlockFixture{
 		"4100": {
-			Txs: []string{relayTxHex, "ff", hex.EncodeToString(runThenRelay), hex.EncodeToString(twice)},
+			Txs: []string{relayTxHex, "ff", hex.EncodeToString(runThenRelay), hex.EncodeToString(twice), hex.EncodeToString(wrapperThenRelay), hex.EncodeToString(updateThenRelay)},
 			Events: [][]gnorpctest.EventFixture{
 				{ // tx 0: the relayer's receive and acknowledgement of packet 7
 					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
@@ -68,6 +84,12 @@ func TestPacketEventsProofHeights(t *testing.T) {
 				{ // tx 3: the first invocation emitted; the second was a no-op
 					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
 				},
+				{ // tx 4: the wrapper emitted; the ethrelay call was a no-op
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
+				},
+				{ // tx 5: update then receive
+					{Type: "recv_packet", PkgPath: "gno.land/r/aib/ibc/core", Attrs: attrs(packet7)},
+				},
 			},
 		},
 	}
@@ -78,10 +100,10 @@ func TestPacketEventsProofHeights(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 5 {
+	if len(evs) != 7 {
 		t.Fatalf("events %+v", evs)
 	}
-	recv, ack, orphan, mixed, double := evs[0], evs[1], evs[2], evs[3], evs[4]
+	recv, ack, orphan, mixed, double, wrapped, updated := evs[0], evs[1], evs[2], evs[3], evs[4], evs[5], evs[6]
 	if !recv.Resolved || recv.Proof.Height != 10000000 || recv.Proof.Revision != 0 || recv.Sequence != 7 || recv.TxIndex != 0 || recv.MsgIndex != 0 || recv.Packet.Sequence != 7 {
 		t.Fatalf("recv %+v", recv)
 	}
@@ -101,6 +123,16 @@ func TestPacketEventsProofHeights(t *testing.T) {
 	// Two invocations of the same packet: ambiguous, deferred.
 	if double.Resolved || double.TxIndex != 3 || !strings.Contains(double.Reason, "2 invocations") {
 		t.Fatalf("double %+v", double)
+	}
+	// A wrapper MsgCall then the ethrelay no-op: deferred, the no-op's
+	// height never taken (review finding 7).
+	if wrapped.Resolved || wrapped.TxIndex != 4 || !strings.Contains(wrapped.Reason, "not proven unable") || wrapped.Proof.Height != 0 {
+		t.Fatalf("wrapped %+v", wrapped)
+	}
+	// An inert ethrelay.UpdateClient then the receive resolves to the
+	// receive's own proof height.
+	if !updated.Resolved || updated.TxIndex != 5 || updated.MsgIndex != 1 || updated.Proof.Height != 10000000 {
+		t.Fatalf("updated %+v", updated)
 	}
 	// An event whose packet bytes differ from every invocation's (another
 	// payload) is not attributed by its key alone.

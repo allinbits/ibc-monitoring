@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -66,9 +67,31 @@ type Client struct {
 	LogChunk uint64
 }
 
+// DialOption configures Dial.
+type DialOption func(*dialConfig)
+
+type dialConfig struct {
+	requestTimeout time.Duration
+}
+
+// WithRequestTimeout bounds every request over HTTP (docs/design.md §7.11):
+// a provider that accepts a request and never answers fails the request
+// instead of stalling the collection. Zero leaves requests unbounded.
+func WithRequestTimeout(d time.Duration) DialOption {
+	return func(c *dialConfig) { c.requestTimeout = d }
+}
+
 // Dial connects to url. name labels the node in provenance.
-func Dial(ctx context.Context, url, name string, fin Finality) (*Client, error) {
-	rc, err := rpc.DialContext(ctx, url)
+func Dial(ctx context.Context, url, name string, fin Finality, opts ...DialOption) (*Client, error) {
+	var dc dialConfig
+	for _, o := range opts {
+		o(&dc)
+	}
+	var ropts []rpc.ClientOption
+	if dc.requestTimeout > 0 {
+		ropts = append(ropts, rpc.WithHTTPClient(&http.Client{Timeout: dc.requestTimeout}))
+	}
+	rc, err := rpc.DialOptions(ctx, url, ropts...)
 	if err != nil {
 		return nil, redactErr(fmt.Errorf("ethrpc %s: %w", name, err))
 	}

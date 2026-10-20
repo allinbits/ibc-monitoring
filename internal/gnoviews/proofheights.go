@@ -49,6 +49,15 @@ var funcKinds = map[string]ethrelaywire.Kind{
 	"Timeout":         ethrelaywire.KindTimeout,
 }
 
+// ethrelayInert are ethrelay's functions proven unable to emit a packet
+// event: each decodes a header or a misbehaviour and forwards it to
+// core.UpdateClient, which touches no packet (ethrelay.gno), so an honest
+// update-then-receive transaction still resolves. Every other call — to any
+// other realm, which can cross-call the core and emit the event itself, or
+// to an ethrelay function not listed here — is treated as a possible
+// emitter and defers the transaction (docs/design.md §4.1).
+var ethrelayInert = map[string]bool{"UpdateClient": true, "SubmitMisbehaviour": true}
+
 // invocation is one decoded ethrelay call of a transaction.
 type invocation struct {
 	msgIndex int
@@ -61,10 +70,11 @@ type invocation struct {
 // invocation that produced it, certain only when: the event's packet bytes
 // and the invocation's packet have the same commitment, exactly one
 // invocation of the event's kind in the transaction names that packet, and
-// the transaction holds no message the monitor cannot decode. A second
-// invocation for the same packet (which the core answers with a receipt
-// no-op and no event) or an unknown message could have been the emitter,
-// so such a transaction is deferred whole.
+// the transaction holds no message that could have emitted the event
+// instead. A second invocation for the same packet (which the core answers
+// with a receipt no-op and no event), a message of another type, or a
+// MsgCall not proven unable to emit it (a wrapper realm) could have been the
+// emitter, so such a transaction is deferred whole.
 func (v *Views) PacketEvents(ctx context.Context, height int64) ([]PacketEvent, error) {
 	events, err := v.rpc.BlockResults(ctx, height)
 	if err != nil {
@@ -95,8 +105,16 @@ func (v *Views) PacketEvents(ctx context.Context, height int64) ([]PacketEvent, 
 			deferred[i] = fmt.Sprintf("%d message(s) of a kind the monitor does not decode (indexes %v) could have emitted the event", len(tx.Other), tx.Other)
 		}
 		for _, c := range tx.Calls {
+			if c.PkgPath != EthRelayPath {
+				deferred[i] = fmt.Sprintf("call %d to %s.%s is not proven unable to emit the event (a wrapper realm can cross-call the core)", c.Index, c.PkgPath, c.Func)
+				continue
+			}
+			if ethrelayInert[c.Func] {
+				continue
+			}
 			kind, ok := funcKinds[c.Func]
-			if c.PkgPath != EthRelayPath || !ok {
+			if !ok {
+				deferred[i] = fmt.Sprintf("ethrelay call %d: function %s is not proven unable to emit the event", c.Index, c.Func)
 				continue
 			}
 			if len(c.Args) != 1 {
