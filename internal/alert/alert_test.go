@@ -244,3 +244,100 @@ func TestUnevaluatedKeepsAlarms(t *testing.T) {
 		t.Fatalf("events %+v", ev)
 	}
 }
+
+// gated refuses or blocks deliveries until opened.
+type gated struct {
+	recorder
+	mu   sync.Mutex
+	fail bool
+}
+
+func (g *gated) Name() string { return "gated" }
+func (g *gated) Send(ctx context.Context, e model.AlarmEvent) error {
+	g.mu.Lock()
+	fail := g.fail
+	g.mu.Unlock()
+	if fail {
+		return context.DeadlineExceeded
+	}
+	return g.recorder.Send(ctx, e)
+}
+
+func (g *gated) set(fail bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.fail = fail
+}
+
+func keysOf(events []model.AlarmEvent) map[string]int {
+	out := map[string]int{}
+	for _, e := range events {
+		out[e.Alarm.Key]++
+	}
+	return out
+}
+
+// A burst past the queue's capacity, against a sink that refuses every
+// delivery, drops and fails notifications but loses none: the pending set
+// raises sink_backlog, reconciliation re-sends the latest state of every
+// alarm once the sink recovers, and the backlog clears (review finding 8).
+func TestBacklogReconciliation(t *testing.T) {
+	st := store.NewMemory(10)
+	g := &gated{}
+	g.set(true)
+	m := NewManagerWith(st, nil, Options{Queue: 2, FailingAfter: 50 * time.Millisecond}, g)
+	t.Cleanup(func() { m.Close(time.Second) })
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+
+	var findings []model.Finding
+	for i := 0; i < 20; i++ {
+		findings = append(findings, model.Finding{Subject: strconv.Itoa(i), Severity: model.SeverityWarning, Title: "w", AlarmKey: "c/" + strconv.Itoa(i)})
+	}
+	m.Apply(context.Background(), result(findings...))
+	time.Sleep(50 * time.Millisecond)
+	// Nothing delivered; drops or failures account for every event.
+	if len(g.list()) != 0 {
+		t.Fatalf("delivered while refusing: %d", len(g.list()))
+	}
+	now = now.Add(time.Minute)
+	m.Reconcile(context.Background())
+	pending := m.Pending()[0]
+	if len(pending) == 0 || m.Dropped()[0] == 0 {
+		t.Fatalf("pending %d dropped %d", len(pending), m.Dropped()[0])
+	}
+	a, ok := st.Alarm("sink_backlog/gated")
+	if !ok || a.State != model.AlarmRaised {
+		t.Fatalf("no backlog alarm: %+v", a)
+	}
+	if f, ok := st.Alarm("sink_failing/gated"); !ok || f.State != model.AlarmRaised {
+		t.Fatalf("no failing alarm: %+v", f)
+	}
+	// The sink recovers: reconciliation delivers every alarm's latest state
+	// with no new transition, and the backlog drains.
+	g.set(false)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.Reconcile(context.Background())
+		time.Sleep(20 * time.Millisecond)
+		if len(m.Pending()[0]) == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(m.Pending()[0]) != 0 {
+		t.Fatalf("pending after recovery: %v", m.Pending()[0])
+	}
+	got := keysOf(g.list())
+	for i := 0; i < 20; i++ {
+		if got["c/"+strconv.Itoa(i)] == 0 {
+			t.Fatalf("alarm c/%d never delivered: %v", i, got)
+		}
+	}
+	m.Reconcile(context.Background())
+	if a, _ := st.Alarm("sink_backlog/gated"); a.State != model.AlarmCleared {
+		t.Fatalf("backlog not cleared: %+v", a)
+	}
+	if f, _ := st.Alarm("sink_failing/gated"); f.State != model.AlarmCleared {
+		t.Fatalf("failing not cleared: %+v", f)
+	}
+}

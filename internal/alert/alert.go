@@ -1,11 +1,13 @@
 // Package alert turns check findings into stateful, deduplicated alarms and
 // sends their transitions to sinks (docs/design.md §8). Delivery is
 // asynchronous and bounded per sink, so a slow sink never delays the
-// evaluation loop or another sink.
+// evaluation loop or another sink; what a sink could not take is kept as a
+// pending set per alarm key and reconciled until delivered.
 package alert
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -24,27 +26,74 @@ type Sink interface {
 // DefaultQueue is the per-sink queue length.
 const DefaultQueue = 256
 
+// Options tune delivery (docs/design.md §8.2).
+type Options struct {
+	// Queue is the per-sink queue length (DefaultQueue when zero).
+	Queue int
+	// BacklogCritical is how long a sink's pending set may stay non-empty
+	// before sink_backlog is critical (default 10 min).
+	BacklogCritical time.Duration
+	// FailingAfter is how long a sink may refuse every delivery before
+	// sink_failing is raised (default 5 min).
+	FailingAfter time.Duration
+	// ReconcileEvery runs Reconcile on a timer (zero: only when called).
+	ReconcileEvery time.Duration
+}
+
+func (o Options) withDefaults() Options {
+	if o.Queue <= 0 {
+		o.Queue = DefaultQueue
+	}
+	if o.BacklogCritical <= 0 {
+		o.BacklogCritical = 10 * time.Minute
+	}
+	if o.FailingAfter <= 0 {
+		o.FailingAfter = 5 * time.Minute
+	}
+	return o
+}
+
+// SinksCheck is the synthetic check whose findings are the sinks' backlog
+// and failure alarms.
+const SinksCheck = "sinks"
+
 // Manager keeps alarm state and fans transitions out.
 type Manager struct {
 	store  store.Store
 	queues []*queue
 	log    *slog.Logger
 	now    func() time.Time
+	opts   Options
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	// mu serializes Apply (a read-modify-write of the alarm state), which
+	// the engine and the reconciliation timer both call.
+	mu sync.Mutex
 }
 
-// NewManager returns a manager over the store, with one bounded queue and
-// worker per sink. Close it to drain.
+// NewManager returns a manager over the store with default options, one
+// bounded queue and worker per sink. Close it to drain.
 func NewManager(st store.Store, log *slog.Logger, sinks ...Sink) *Manager {
+	return NewManagerWith(st, log, Options{}, sinks...)
+}
+
+// NewManagerWith is NewManager with options.
+func NewManagerWith(st store.Store, log *slog.Logger, opts Options, sinks ...Sink) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
+	opts = opts.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: st, log: log, now: time.Now, ctx: ctx, cancel: cancel}
+	m := &Manager{store: st, log: log, now: time.Now, opts: opts, ctx: ctx, cancel: cancel}
+	names := map[string]int{}
 	for _, s := range sinks {
-		q := &queue{sink: s, ch: make(chan model.AlarmEvent, DefaultQueue), log: log}
+		id := s.Name()
+		if n := names[s.Name()]; n > 0 {
+			id = fmt.Sprintf("%s#%d", s.Name(), n)
+		}
+		names[s.Name()]++
+		q := &queue{sink: s, id: id, ch: make(chan model.AlarmEvent, opts.Queue), log: log, pending: map[string]model.AlarmEvent{}, now: m.clock}
 		m.queues = append(m.queues, q)
 		m.wg.Add(1)
 		go func() {
@@ -52,8 +101,26 @@ func NewManager(st store.Store, log *slog.Logger, sinks ...Sink) *Manager {
 			q.run(ctx)
 		}()
 	}
+	if opts.ReconcileEvery > 0 {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			t := time.NewTicker(opts.ReconcileEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					m.Reconcile(ctx)
+				}
+			}
+		}()
+	}
 	return m
 }
+
+func (m *Manager) clock() time.Time { return m.now() }
 
 // Close stops the workers after they drain what they can within timeout.
 func (m *Manager) Close(timeout time.Duration) {
@@ -82,6 +149,16 @@ func (m *Manager) Dropped() []int64 {
 	return out
 }
 
+// Pending returns the alarm keys each sink has not delivered yet, per sink
+// index.
+func (m *Manager) Pending() [][]string {
+	out := make([][]string, len(m.queues))
+	for i, q := range m.queues {
+		out[i] = q.pendingKeys()
+	}
+	return out
+}
+
 // Apply reconciles a check's result with the alarms it owns: a finding with
 // an AlarmKey raises or updates its alarm; an alarm of this check whose key
 // the result no longer reports is cleared. A skipped or errored result
@@ -90,6 +167,8 @@ func (m *Manager) Apply(_ context.Context, r model.CheckResult) {
 	if r.Status == model.CheckSkipped || r.Status == model.CheckError {
 		return
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	now := m.now()
 	seen := map[string]bool{}
 	for _, f := range r.Findings {
@@ -130,6 +209,44 @@ func (m *Manager) Apply(_ context.Context, r model.CheckResult) {
 	}
 }
 
+// Reconcile re-enqueues, for every sink, the current state of each alarm
+// whose latest transition the sink has not delivered (dropped for a full
+// queue, or refused), independently of any new transition, and applies the
+// sinks' own alarms: sink_backlog/<sink> while a pending set is non-empty
+// and sink_failing/<sink> while a sink refuses every delivery
+// (docs/design.md §8.2). Never blocks: a queue with no room is retried next
+// time.
+func (m *Manager) Reconcile(ctx context.Context) {
+	now := m.now()
+	r := model.CheckResult{Check: SinksCheck, Status: model.CheckOK, StartedAt: now, FinishedAt: now, Findings: []model.Finding{}}
+	for _, q := range m.queues {
+		q.resend(m.store)
+		pending, since, dropped, failed, failingSince := q.status()
+		if pending > 0 {
+			sev := model.SeverityWarning
+			if !since.IsZero() && now.Sub(since) >= m.opts.BacklogCritical {
+				sev = model.SeverityCritical
+			}
+			r.Status = model.CheckAlarm
+			r.Findings = append(r.Findings, model.Finding{
+				Subject: q.id, Severity: sev, AlarmKey: "sink_backlog/" + q.id,
+				Title:  fmt.Sprintf("sink %s has %d undelivered alarm notification(s)", q.id, pending),
+				Detail: fmt.Sprintf("%d dropped for a full queue, %d refused by the sink; the latest state of each alarm is re-sent until the sink accepts it (design §8.2)", dropped, failed),
+				Values: map[string]string{"pending": fmt.Sprint(pending), "dropped": fmt.Sprint(dropped), "failed": fmt.Sprint(failed), "since": since.UTC().Format(time.RFC3339)},
+			})
+		}
+		if !failingSince.IsZero() && now.Sub(failingSince) >= m.opts.FailingAfter {
+			r.Status = model.CheckAlarm
+			r.Findings = append(r.Findings, model.Finding{
+				Subject: q.id, Severity: model.SeverityCritical, AlarmKey: "sink_failing/" + q.id,
+				Title:  fmt.Sprintf("sink %s has refused every delivery since %s", q.id, failingSince.UTC().Format(time.RFC3339)),
+				Detail: "notifications are kept pending and re-sent; check the sink's endpoint and credentials",
+			})
+		}
+	}
+	m.Apply(ctx, r)
+}
+
 func (m *Manager) update(a *model.Alarm, f model.Finding, now time.Time) {
 	a.Severity = f.Severity
 	a.Title = f.Title
@@ -154,15 +271,28 @@ func (m *Manager) emit(typ string, a model.Alarm, now time.Time) {
 	}
 }
 
-// queue is one sink's bounded delivery queue.
+// queue is one sink's bounded delivery queue with its pending set.
 type queue struct {
 	sink    Sink
+	id      string
 	ch      chan model.AlarmEvent
 	log     *slog.Logger
+	now     func() time.Time
 	dropped atomic.Int64
+	failed  atomic.Int64
+
+	mu sync.Mutex
+	// pending is, per alarm key, the latest transition the sink has not
+	// delivered; pendingSince when it became non-empty.
+	pending      map[string]model.AlarmEvent
+	pendingSince time.Time
+	// failingSince is the start of the current streak of refused
+	// deliveries (zero: the last delivery succeeded).
+	failingSince time.Time
 }
 
-// enqueue never blocks: a full queue drops the oldest event and counts it.
+// enqueue never blocks: a full queue drops the oldest event, counts it and
+// keeps it pending.
 func (q *queue) enqueue(e model.AlarmEvent) {
 	for {
 		select {
@@ -173,8 +303,76 @@ func (q *queue) enqueue(e model.AlarmEvent) {
 		select {
 		case old := <-q.ch:
 			q.dropped.Add(1)
-			q.log.Warn("alert queue full, dropping oldest", "sink", q.sink.Name(), "dropped", old.Alarm.Key)
+			q.markPending(old)
+			q.log.Warn("alert queue full, dropping oldest", "sink", q.id, "dropped", old.Alarm.Key)
 		default:
+		}
+	}
+}
+
+// markPending keeps e as the key's undelivered transition unless a later
+// one is pending already.
+func (q *queue) markPending(e model.AlarmEvent) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if cur, ok := q.pending[e.Alarm.Key]; ok && cur.Alarm.Transitions > e.Alarm.Transitions {
+		return
+	}
+	if len(q.pending) == 0 {
+		q.pendingSince = q.now()
+	}
+	q.pending[e.Alarm.Key] = e
+}
+
+// delivered removes the key's pending transition unless a later one is
+// pending.
+func (q *queue) delivered(e model.AlarmEvent) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if cur, ok := q.pending[e.Alarm.Key]; ok && cur.Alarm.Transitions <= e.Alarm.Transitions {
+		delete(q.pending, e.Alarm.Key)
+	}
+	if len(q.pending) == 0 {
+		q.pendingSince = time.Time{}
+	}
+}
+
+func (q *queue) pendingKeys() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]string, 0, len(q.pending))
+	for k := range q.pending {
+		out = append(out, k)
+	}
+	return out
+}
+
+func (q *queue) status() (pending int, since time.Time, dropped, failed int64, failingSince time.Time) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.pending), q.pendingSince, q.dropped.Load(), q.failed.Load(), q.failingSince
+}
+
+// resend enqueues the current state of each pending alarm, one event per
+// key, while the queue has room.
+func (q *queue) resend(st store.Store) {
+	q.mu.Lock()
+	events := make([]model.AlarmEvent, 0, len(q.pending))
+	for _, e := range q.pending {
+		events = append(events, e)
+	}
+	q.mu.Unlock()
+	for _, e := range events {
+		if len(q.ch) >= cap(q.ch) {
+			return
+		}
+		if a, ok := st.Alarm(e.Alarm.Key); ok {
+			e.Alarm = a
+		}
+		select {
+		case q.ch <- e:
+		default:
+			return
 		}
 	}
 }
@@ -192,8 +390,20 @@ func (q *queue) run(ctx context.Context) {
 
 func (q *queue) deliver(ctx context.Context, e model.AlarmEvent) {
 	if err := q.sink.Send(ctx, e); err != nil {
-		q.log.Error("alert sink failed", "sink", q.sink.Name(), "alarm", e.Alarm.Key, "err", err)
+		q.failed.Add(1)
+		q.markPending(e)
+		q.mu.Lock()
+		if q.failingSince.IsZero() {
+			q.failingSince = q.now()
+		}
+		q.mu.Unlock()
+		q.log.Error("alert sink failed", "sink", q.id, "alarm", e.Alarm.Key, "err", err)
+		return
 	}
+	q.mu.Lock()
+	q.failingSince = time.Time{}
+	q.mu.Unlock()
+	q.delivered(e)
 }
 
 // drain delivers what is queued now (used on Close).

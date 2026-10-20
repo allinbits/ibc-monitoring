@@ -377,7 +377,7 @@ export interface Info {
 export interface ChainState {
   ok: boolean;
   verified: boolean;
-  /** False when a cross-chain dependency was missing: collected, not fresh. */
+  /** False when a cross-chain dependency was missing: the route snapshots are not fresh; clients and governance are. */
   complete: boolean;
   incomplete?: string;
   error?: string;

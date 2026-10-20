@@ -93,3 +93,48 @@ func TestHealthyChainChecksRunBeforeStalledDeadline(t *testing.T) {
 		t.Fatalf("states %+v %+v", pins.GnoState, pins.EthState)
 	}
 }
+
+// Each chain is collected and evaluated on its own schedule (seventh round,
+// finding 6): while one Ethereum collection stalls for its whole deadline,
+// the gno chain keeps polling and evaluating several times.
+func TestHealthyChainKeepsCadenceWhileOtherStalls(t *testing.T) {
+	f, gno, gno2 := gnoFixture(t)
+	done := make(chan struct{})
+	hanging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-done }))
+	t.Cleanup(hanging.Close)
+	t.Cleanup(func() { close(done) })
+	ec, err := ethrpc.Dial(context.Background(), hanging.URL, "hanging", ethrpc.Finality{Mode: "latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eth, err := ethviews.New(ec, ethviews.Addresses{Admin: common.HexToAddress("0xaaaa"), Transfer: common.HexToAddress("0xbbbb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := store.NewMemory(100)
+	sink := &recordingSink{}
+	eng := &Engine{
+		Collector: &Collector{Gno: gno, Gno2: gno2, Eth: eth, Eth2: ec, RequireCrossCheck: true, Store: st, Timeout: 5 * time.Second},
+		Checks:    []Check{ClientExpiry{Config: DefaultClientExpiryConfig(), Chain: model.ChainGno}, ClientExpiry{Config: DefaultClientExpiryConfig(), Chain: model.ChainEthereum}},
+		Alerts:    alert.NewManager(st, nil, sink),
+		Store:     st,
+		Interval:  50 * time.Millisecond,
+		Now:       func() time.Time { return f.Time },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	eng.Run(ctx)
+	polls := len(st.ResultHistory("client_expiry/gno", 100))
+	if polls < 3 {
+		t.Fatalf("gno evaluated %d time(s) in 1.5 s with a 50 ms interval while Ethereum stalled", polls)
+	}
+	// Ethereum never completed a collection; gno completed many (its very
+	// last one may have been cut by the context's end).
+	pins, _ := latestPins(st)
+	if pins.EthState.LastCollection != 0 || pins.GnoState.LastCollection == 0 || pins.GnoState.LastSuccess.IsZero() {
+		t.Fatalf("states %+v %+v", pins.GnoState, pins.EthState)
+	}
+	if !sink.has("client_expiry/gno/tm-1") {
+		t.Fatal("the gno alarm was never delivered")
+	}
+}

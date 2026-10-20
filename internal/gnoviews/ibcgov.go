@@ -94,13 +94,24 @@ func (v *Views) Governance(ctx context.Context, routes []string, p Pin) (model.G
 		return g, err
 	}
 
+	// routes are the flag subjects: every enrolled route key and every
+	// client outside the routes (docs/design.md §4.1); a flag on a
+	// standalone client counts toward the global hold like any other.
+	seats := map[int]bool{}
 	for _, r := range routes {
 		flags, err := v.Flags(ctx, r, p)
 		if err != nil {
 			return g, err
 		}
 		g.Flags = append(g.Flags, flags...)
+		for _, f := range flags {
+			if f.Seat < GuardianSeats {
+				seats[f.Seat] = true
+			}
+		}
 	}
+	g.Hold.GuardianSeats = len(seats)
+	g.Hold.Explained = g.Hold.Held == (len(seats) >= 2)
 
 	if val, err = v.eval(ctx, pkg, "Epoch()", p); err != nil {
 		return g, err

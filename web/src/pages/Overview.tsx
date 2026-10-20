@@ -16,8 +16,8 @@ function ChainError({ state, error }: { state?: ChainState; error?: string }) {
   if (state?.ok && state.verified && !state.complete) {
     return (
       <p className="error">
-        collection incomplete{state.incomplete ? `: ${state.incomplete}` : ""}; the snapshots below
-        are not fresh
+        collection incomplete{state.incomplete ? `: ${state.incomplete}` : ""}; the route snapshots
+        are not fresh (clients and governance are)
       </p>
     );
   }

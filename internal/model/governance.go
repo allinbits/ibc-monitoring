@@ -20,6 +20,11 @@ type GnoFlag struct {
 type GnoHold struct {
 	Held  bool  `json:"held"`
 	Since int64 `json:"since,omitempty"`
+	// GuardianSeats is how many distinct guardian seats have a standing
+	// flag across every subject read (routes and standalone clients); the
+	// hold stands at two. Explained is whether that accounts for Held.
+	GuardianSeats int  `json:"guardian_seats"`
+	Explained     bool `json:"explained"`
 	// EndsAt is known only from the HoldEnding event (docs/design.md §15).
 	EndsAt int64 `json:"ends_at,omitempty"`
 }

@@ -33,7 +33,10 @@ func (c RouteRelationship) Run(_ context.Context, st store.Store, now time.Time)
 		}
 		subject := er.RouteKey
 		key := "route_relationship/" + subject
-		if !pins.Fresh(model.ChainEthereum, s.Provenance) || er.GnoDiscovery == 0 {
+		// A route snapshot collected without its gno inputs says so itself
+		// (readiness per subject, docs/design.md §7.11): deferred, while the
+		// chain's client and governance checks run.
+		if !pins.Fresh(model.ChainEthereum, s.Provenance) || er.GnoDiscovery == 0 || len(er.Incomplete) > 0 {
 			unevaluated = append(unevaluated, key)
 			continue
 		}

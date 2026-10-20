@@ -105,6 +105,14 @@ type Sink struct {
 
 type Alerts struct {
 	Sinks []Sink `yaml:"sinks"`
+	// Queue is the per-sink queue length (256); BacklogCritical how long a
+	// sink's undelivered set may stand before sink_backlog is critical
+	// (10m); FailingAfter how long a sink may refuse every delivery before
+	// sink_failing (5m); ReconcileEvery the resend timer (30s). Design §8.2.
+	Queue           int           `yaml:"queue"`
+	BacklogCritical time.Duration `yaml:"sink_backlog_critical"`
+	FailingAfter    time.Duration `yaml:"sink_failing_after"`
+	ReconcileEvery  time.Duration `yaml:"reconcile_every"`
 }
 
 type AutoFlag struct {
@@ -175,6 +183,9 @@ func (c *Config) defaults() {
 	}
 	if c.Monitor.PollInterval == 0 {
 		c.Monitor.PollInterval = 10 * time.Second
+	}
+	if c.Alerts.ReconcileEvery == 0 {
+		c.Alerts.ReconcileEvery = 30 * time.Second
 	}
 	if c.Monitor.RequestTimeout == 0 {
 		c.Monitor.RequestTimeout = 20 * time.Second

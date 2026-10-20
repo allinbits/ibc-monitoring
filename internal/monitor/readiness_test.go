@@ -61,7 +61,9 @@ func TestStaleSubjectsAreSkipped(t *testing.T) {
 		t.Fatalf("reason: %q", r.Reason)
 	}
 	pins, _ := latestPins(st)
-	if pins.GnoState.OK || pins.GnoState.ConsecutiveFailures != 1 || pins.GnoState.LastCollection != 1 || !pins.EthState.OK || pins.EthState.LastCollection != 2 {
+	// Collections are numbered per chain collection: gno's last success is
+	// one of the first round's two ids, Ethereum's one of the second round's.
+	if pins.GnoState.OK || pins.GnoState.ConsecutiveFailures != 1 || pins.GnoState.LastCollection == 0 || pins.GnoState.LastCollection > 2 || !pins.EthState.OK || pins.EthState.LastCollection < 3 {
 		t.Fatalf("states: %+v %+v", pins.GnoState, pins.EthState)
 	}
 	// The gno client snapshots are still served, marked by their collection.

@@ -83,6 +83,9 @@ func (e *Engine) RunOnce(ctx context.Context) []model.CheckResult {
 		}
 		run(c)
 	}
+	if e.Alerts != nil {
+		e.Alerts.Reconcile(ctx)
+	}
 	return results
 }
 
@@ -184,7 +187,11 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// Run loops until the context ends.
+// Run loops until the context ends: one loop per chain, each collecting its
+// chain at the interval, running the chain's local checks, then the
+// cross-chain checks and the chain alarms over the latest bundles, so a
+// chain whose provider stalls never costs the other its cadence
+// (docs/design.md §7.11). Without a collector, one loop runs every check.
 func (e *Engine) Run(ctx context.Context) {
 	log := e.Log
 	if log == nil {
@@ -194,17 +201,73 @@ func (e *Engine) Run(ctx context.Context) {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		results := e.RunOnce(ctx)
+	report := func(results []model.CheckResult) {
 		for _, r := range results {
 			log.Info("check", "name", r.Check, "status", r.Status, "findings", len(r.Findings), "reason", r.Reason)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+	}
+	var chains []model.Chain
+	if e.Collector != nil {
+		chains = e.Collector.Chains()
+	}
+	if len(chains) == 0 {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			report(e.RunOnce(ctx))
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 	}
+	var wg sync.WaitGroup
+	for _, chain := range chains {
+		wg.Add(1)
+		go func(chain model.Chain) {
+			defer wg.Done()
+			t := time.NewTicker(interval)
+			defer t.Stop()
+			for {
+				e.Collector.CollectChain(ctx, chain)
+				report(e.afterChain(ctx, chain))
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}(chain)
+	}
+	wg.Wait()
+}
+
+// afterChain runs, once a chain has published, its chain-local checks, then
+// the chain alarms, the cross-chain checks and the sinks' reconciliation.
+func (e *Engine) afterChain(ctx context.Context, chain model.Chain) []model.CheckResult {
+	now := time.Now()
+	if e.Now != nil {
+		now = e.Now()
+	}
+	var results []model.CheckResult
+	for _, c := range e.Checks {
+		if chainOf(c) == chain {
+			results = append(results, e.runCheck(ctx, c, now))
+		}
+	}
+	if e.Alerts != nil {
+		e.mu.Lock()
+		e.applyChainAlarms(ctx, now)
+		e.mu.Unlock()
+	}
+	for _, c := range e.Checks {
+		if chainOf(c) == "" {
+			results = append(results, e.runCheck(ctx, c, now))
+		}
+	}
+	if e.Alerts != nil {
+		e.Alerts.Reconcile(ctx)
+	}
+	return results
 }

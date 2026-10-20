@@ -31,6 +31,7 @@
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.Seat(5)": "( address)",
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.Held()": "(true bool)",
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.HoldSince()": "(1776600000 int64)",
+    "vm/qeval|gno.land/r/aib/ibc/ibcgov.Flags(\"tm-1\")": "(slice[] []string)",
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.Flags(\"ethereum-1\")": "(slice[(\"payouts seat 0 at 1776600000 naming ethereum-1/00000000000000000007,ethereum-1/00000000000000000009\" string),(\"credits seat 1 at 1776600100\" string),(\"sends seat 4 at 1776600200\" string)] []string)",
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.PayoutsEpoch(\"ethereum-1\")": "(1 int64)\n(1760000000 int64)",
     "vm/qeval|gno.land/r/aib/ibc/ibcgov.Epoch()": "(1 uint32)",

@@ -50,6 +50,10 @@ monitor:
       ethereum: 24h           # ADR §9: the gno Ethereum client, no update for 24 h
 
 alerts:
+  queue: 256                   # per-sink queue; what overflows is kept pending and re-sent
+  sink_backlog_critical: 10m   # undelivered notifications older than this: sink_backlog critical
+  sink_failing_after: 5m       # a sink refusing every delivery for this long: sink_failing
+  reconcile_every: 30s         # resend timer for pending notifications
   sinks:
     - type: log
     # - type: webhook

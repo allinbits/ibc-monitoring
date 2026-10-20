@@ -275,7 +275,8 @@ func runServe(args []string, withMonitor, withWorker bool) error {
 		// watch's pending kind 5/6/7/9 decisions and recovery candidates.
 	}
 	if withMonitor {
-		alerts := alert.NewManager(rt.store, rt.log, rt.sinks()...)
+		ac := rt.cfg.Alerts
+		alerts := alert.NewManagerWith(rt.store, rt.log, alert.Options{Queue: ac.Queue, BacklogCritical: ac.BacklogCritical, FailingAfter: ac.FailingAfter, ReconcileEvery: ac.ReconcileEvery}, rt.sinks()...)
 		defer alerts.Close(5 * time.Second)
 		eng := &monitor.Engine{Collector: rt.collector(), Checks: rt.checks(), Alerts: alerts, Store: rt.store, Interval: rt.cfg.Monitor.PollInterval, DeferredAlarmFailures: rt.cfg.Monitor.DeferredAlarmFailures, Log: rt.log}
 		go eng.Run(ctx)

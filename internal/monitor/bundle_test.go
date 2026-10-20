@@ -19,6 +19,12 @@ import (
 
 func gnoFixture(t *testing.T) (*gnorpctest.Fixture, *gnoviews.Views, *gnoviews.Views) {
 	t.Helper()
+	f, _, gno, gno2 := gnoFixtureServer(t)
+	return f, gno, gno2
+}
+
+func gnoFixtureServer(t *testing.T) (*gnorpctest.Fixture, *gnorpctest.Server, *gnoviews.Views, *gnoviews.Views) {
+	t.Helper()
 	f, err := gnorpctest.Load("../gnoviews/testdata/devnet.json")
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +33,7 @@ func gnoFixture(t *testing.T) (*gnorpctest.Fixture, *gnoviews.Views, *gnoviews.V
 	t.Cleanup(gsrv.Close)
 	gno := gnoviews.New(gnorpc.New(gsrv.URL, gnorpc.WithName("gno-fixture")), gnoviews.DefaultPaths)
 	gno2 := gnoviews.New(gnorpc.New(gsrv.URL, gnorpc.WithName("gno-second")), gnoviews.DefaultPaths)
-	return f, gno, gno2
+	return f, gsrv, gno, gno2
 }
 
 func ethRoute(t *testing.T, st store.Store) (model.EthRoute, store.Snapshot) {
@@ -55,11 +61,85 @@ func TestEthereumWithoutGnoDiscoveryIsIncomplete(t *testing.T) {
 	if er.GnoDiscovery != 0 || len(er.Incomplete) == 0 || er.CurrentClient != "client-0" || er.RouteKey != "client-0" {
 		t.Fatalf("route %+v", er)
 	}
-	if pins.Fresh(model.ChainEthereum, snap.Provenance) {
-		t.Fatal("an incomplete collection counted as fresh")
+	// Readiness is per subject (review finding 7 of the seventh round): the
+	// chain is fresh for what needs nothing from gno.land — its clients and
+	// governance — while the route says what it lacks and the checks that
+	// depend on it defer.
+	if !pins.Fresh(model.ChainEthereum, snap.Provenance) {
+		t.Fatal("the Ethereum collection should be fresh for its own subjects")
+	}
+	clients := st.Snapshots(store.KindEthClients)
+	if len(clients) != 1 || !pins.Fresh(model.ChainEthereum, clients[0].Provenance) {
+		t.Fatalf("eth client snapshots %d, fresh: %v", len(clients), len(clients) == 1 && pins.Fresh(model.ChainEthereum, clients[0].Provenance))
 	}
 	if r := (RouteRelationship{}).Run(context.Background(), st, time.Now()); r.Status != model.CheckSkipped || len(r.Unevaluated) != 1 {
 		t.Fatalf("relationship on incomplete: %+v", r)
+	}
+}
+
+// Without any gno discovery, the Ethereum-local checks still run on the
+// collected Ethereum subjects: a nearly expired GnoLightClient alarms while
+// the route-dependent relationship check defers (seventh round, finding 7).
+func TestEthereumLocalChecksRunWithoutGnoDiscovery(t *testing.T) {
+	f, _, _ := gnoFixture(t)
+	eth, ethc, _ := ethFixture(t, f.Time.Add(-14*24*time.Hour+6*time.Hour))
+	st := store.NewMemory(10)
+	eng := &Engine{
+		Collector: &Collector{Eth: eth, Eth2: ethc, RequireCrossCheck: true, Store: st},
+		Checks:    []Check{ClientExpiry{Config: DefaultClientExpiryConfig(), Chain: model.ChainEthereum}, RouteRelationship{}},
+		Store:     st,
+		Now:       func() time.Time { return f.Time },
+	}
+	results := eng.RunOnce(context.Background())
+	byName := map[string]model.CheckResult{}
+	for _, r := range results {
+		byName[r.Check] = r
+	}
+	ce := byName["client_expiry/ethereum"]
+	if ce.Status != model.CheckAlarm || len(ce.Findings) != 1 || ce.Findings[0].AlarmKey != "client_expiry/ethereum/client-0" || ce.Findings[0].Severity != model.SeverityCritical {
+		t.Fatalf("ethereum expiry without gno: %+v", ce)
+	}
+	if rr := byName["route_relationship"]; rr.Status != model.CheckSkipped {
+		t.Fatalf("relationship without gno inputs: %+v", rr)
+	}
+	pins, _ := latestPins(st)
+	if pins.EthState.Complete || !pins.EthState.OK {
+		t.Fatalf("state %+v", pins.EthState)
+	}
+}
+
+// A global hold that comes entirely from flags on a client outside the
+// enrolled routes is collected and explained (seventh round, finding 9):
+// the flag subjects are the route keys plus the standalone clients, a
+// route's own client being an alias of its key.
+func TestHoldFromStandaloneClientFlags(t *testing.T) {
+	f, gsrv, gno, gno2 := gnoFixtureServer(t)
+	gsrv.Set(`vm/qeval|gno.land/r/aib/ibc/ibcgov.Flags("ethereum-1")`, "(slice[] []string)")
+	gsrv.Set(`vm/qeval|gno.land/r/aib/ibc/ibcgov.Flags("tm-1")`, `(slice[("credits seat 0 at 1776600000" string),("payouts seat 1 at 1776600100" string)] []string)`)
+	st := store.NewMemory(10)
+	c := &Collector{Gno: gno, Gno2: gno2, RequireCrossCheck: true, Store: st}
+	pins := c.Collect(context.Background())
+	if !pins.GnoState.OK || !pins.GnoState.Verified {
+		t.Fatalf("gno state %+v", pins.GnoState)
+	}
+	gs, ok := st.Snapshot(store.KindGnoGovernance, "ibcgov")
+	if !ok {
+		t.Fatal("no governance snapshot")
+	}
+	gov := gs.Value.(model.GnoGovernance)
+	if len(gov.Flags) != 2 || gov.Flags[0].Route != "tm-1" || gov.Flags[1].Route != "tm-1" {
+		t.Fatalf("flags %+v", gov.Flags)
+	}
+	if !gov.Hold.Held || gov.Hold.GuardianSeats != 2 || !gov.Hold.Explained {
+		t.Fatalf("hold %+v", gov.Hold)
+	}
+	_ = f
+	// The subjects: the route key once (its client is an alias), then the
+	// standalone client.
+	routes := []model.Route{{Key: "ethereum-1", Client: "ethereum-1", Replaced: []string{"ethereum-0"}}}
+	clients := []model.Client{{ID: "ethereum-1"}, {ID: "ethereum-0"}, {ID: "tm-1"}}
+	if got := flagSubjects(routes, clients); len(got) != 2 || got[0] != "ethereum-1" || got[1] != "tm-1" {
+		t.Fatalf("subjects %v", got)
 	}
 }
 
@@ -77,7 +157,7 @@ func TestEthereumWaitsForGnoDiscovery(t *testing.T) {
 		t.Fatalf("states %+v %+v", pins.GnoState, pins.EthState)
 	}
 	er, snap := ethRoute(t, st)
-	if er.GnoDiscovery != pins.Collection || er.GnoRoute == "" || er.GnoCounterparty != "client-0" || er.RelationshipMismatch != "" {
+	if er.GnoDiscovery != pins.GnoState.LastCollection || er.GnoRoute == "" || er.GnoCounterparty != "client-0" || er.RelationshipMismatch != "" {
 		t.Fatalf("route %+v", er)
 	}
 	if !pins.Fresh(model.ChainEthereum, snap.Provenance) {
@@ -88,7 +168,7 @@ func TestEthereumWaitsForGnoDiscovery(t *testing.T) {
 		t.Fatal("no discovery")
 	}
 	disc := ds.Value.(GnoDiscovery)
-	if disc.Collection != pins.Collection || len(disc.Routes) == 0 || len(disc.Clients) == 0 {
+	if disc.Collection != pins.GnoState.LastCollection || len(disc.Routes) == 0 || len(disc.Clients) == 0 {
 		t.Fatalf("discovery %+v", disc)
 	}
 	for _, kind := range []string{store.KindGnoClients, store.KindGnoRoutes, store.KindGnoGovernance} {
