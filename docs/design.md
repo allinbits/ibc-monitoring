@@ -318,7 +318,7 @@ Rows below are marked **exact**, **float64** or **saturating** where it matters.
 | admin | `qrender admin` (Markdown, text only), `qeval AuthorityMembers() []address`, `Relayers() []address`, `Paused() bool`, `ImplPath() string`, `ImplVersion() string`, `RegisteredImplPaths() []string`, `IsImplAddress(a) bool` | the T6 corner and the bridge-realm set |
 | apps | `qrender apps` → `[{port_id, pkg_path, address, paused}]`, `apps/pending` | |
 | events (block results) | `block_results` of each height, `send_packet`, `recv_packet`, `write_acknowledgement`, `acknowledge_packet`, `timeout_packet` (`packet_source_client`, `packet_dest_client`, `packet_sequence`, `packet_timeout_timestamp`, `encoded_packet_hex`, `encoded_acknowledgement_hex`), `create_client`/`update_client`/`client_misbehaviour`/`recover_client`/`migrate_client`, `client_retired`, `impl_updated` | the gno-side receive list (`recv_packet` with the packet bytes) for the orphan test; update cadence for the liveness check. **No event carries the proof height** a receive, ack or timeout was verified at |
-| proof heights (gno.land) | the transaction behind the `recv_packet`/`acknowledge_packet`/`timeout_packet` event: `block` at that height gives the amino-encoded transactions in order and `block_results` the events per transaction index, both read from both providers. The relayer's path is **`gno.land/r/aib/ibc/ethrelay`**: a `MsgCall` of `RecvPacket`, `Acknowledgement` or `Timeout` whose single argument is the base64 of a `p/aib/encoding/wire/v0` message — `Uint(sequence) Str(sourceClient) Str(destinationClient) Uint(timeout) Uvarint(n) [Str(sourcePort) Str(destinationPort) Str(version) Str(encoding) Blob(value)]×n Uint(revision) Uint(height) [Uvarint(m) Blob(ack)×m, acknowledgements only] Blob(proof)` (`EncodePacketMsg`; big-endian fixed-width `Uint`, uvarint-prefixed blobs) — decoded by the monitor's own reader (`internal/ethrelaywire`, fixture generated with the relayer's encoder); a direct `MsgCall` of the core's functions carries `ProofHeight` in its amino arguments; a `MsgRun` script is parsed by a strict grammar for the `types.Height{…}` literal; a transaction with several messages is decoded message by message and each decoded packet is matched to its event by (source client, sequence) within the same transaction index | the **proof height** §7.5 and §7.7 compare at (a slot for an Ethereum client), and the one governance acknowledgements (§7.0 coverage) are proven at. A transaction the decoders cannot read (a wrapper the monitor does not know, a script that computes the height, a message whose packet matches no event of its transaction) leaves the proof height **unresolved**: the comparison is deferred, and the current head is never substituted |
+| proof heights (gno.land) | the transaction behind the `recv_packet`/`acknowledge_packet`/`timeout_packet` event: `block` at that height gives the amino-encoded transactions in order and `block_results` the events per transaction index, both read from both providers. The relayer's path is **`gno.land/r/aib/ibc/ethrelay`**: a `MsgCall` of `RecvPacket`, `Acknowledgement` or `Timeout` whose single argument is the base64 of a `p/aib/encoding/wire/v0` message — `Uint(sequence) Str(sourceClient) Str(destinationClient) Uint(timeout) Uvarint(n) [Str(sourcePort) Str(destinationPort) Str(version) Str(encoding) Blob(value)]×n Uint(revision) Uint(height) [Uvarint(m) Blob(ack)×m, acknowledgements only] Blob(proof)` (`EncodePacketMsg`; big-endian fixed-width `Uint`, uvarint-prefixed blobs) — decoded by the monitor's own reader (`internal/ethrelaywire`, fixture generated with the relayer's encoder); a direct `MsgCall` of the core's functions carries `ProofHeight` in its amino arguments; a `MsgRun` script is parsed by a strict grammar for the `types.Height{…}` literal; a transaction with several messages is decoded message by message, **message indexes kept**, and an event is attributed to an invocation only when the attribution is certain: the event's `encoded_packet_hex` (the core's protobuf packet) is decoded and its commitment must equal that of the message's packet (**complete packet bytes**, not the key alone), exactly **one** message of the event's kind names that packet, and the transaction holds **no** message the monitor cannot decode — a second invocation for the same packet (which the core answers with a receipt-based no-op and no event) or an unknown message (a `MsgRun`, a wrapper) could have been the one that emitted the event, so such a transaction is **deferred** whole | the **proof height** §7.5 and §7.7 compare at (a slot for an Ethereum client), and the one governance acknowledgements (§7.0 coverage) are proven at. A transaction the decoders cannot read, or whose attribution is ambiguous, leaves the proof height **unresolved**: the comparison is deferred, and the current head is never substituted. The decoders parse incrementally under explicit limits (transaction size, field and message counts, list lengths); an input past a limit is deferred, never partially trusted |
 
 Expiry is **derived**, there is no getter: Tendermint `expiry = last_consensus_state.timestamp + trusting_period`;
 Ethereum `expired when currentSlot > latestSlot + 8 · epochs_per_sync_committee_period · slots_per_epoch` with
@@ -358,7 +358,7 @@ asks for exported views.
 | `Closed(route)`, `LossClosed(route)`, `Unrecovered(route)`, `Unresolved(route)` | route state | `RouteJSON` |
 | `Denoms(route)`, `DenomConfig(route, denom)`, `Totals(route, denom)` | per denom config and totals | `RouteJSON.denoms` |
 | **`Meters(route, denom, to, now, epoch, epochAt, lock) (bridge, recipient int64)`** | the **live** bridge and recipient levels refilled to `now` on copies; `epoch, epochAt` from `ibcgov.PayoutsEpoch(route)`, `lock` from the escrow accounting (0 for `mint`), `to` a recipient or empty | **none that is exact.** `Meter.Refill` depends on state the JSON does not show: the payouts-epoch reset (the meter empties as of `epochAt` when the epoch changed), the fractional remainder `Frac`, and the rate and ceiling *stored by the last refill* (a cap change applies only from the next refill); a recipient's queue meter is not rendered at all. A client-side refill from `level, at` and the current cap reproduces none of that, so it is **not shown**: the live level is `unavailable` until the reader path is verified or §15 P1 lands; the stored level and its time are shown as such |
-| `ReopenBlockers(route) []string`, `SuspectUnsettled(route, client) int64`, `OpenSends(route, client) int64`, `SuspectFrom(route, client) (int64, bool)` | reconciliation progress per retired client | derive from the sends page: open = outcome `""` or payment `queued`; suspect unsettled = `processed_height ≥ suspectFrom` and `settlement == 0`; `suspectFrom` only from the replacement decision's text |
+| `ReopenBlockers(route) []string`, `SuspectUnsettled(route, client) int64`, `OpenSends(route, client) int64`, `SuspectFrom(route, client) (int64, bool)` | reconciliation progress per retired client | derive from the sends page with the realm's exact predicates: open = `settlement == 0 && (outcome == "" || payment == "queued")`; suspect unsettled = `processed_height ≥ suspectFrom && settlement == 0`; `suspectFrom` only from the replacement decision's text |
 | `Claim(route, key)`, `Sweep(route, key)`, `Send(route, key)`, `Voidable(route, key, forged)` | one record by key | the pages |
 | `Recap(route, id) (Recap, bool)` | a recapitalization authorization | the `route_gov` event `note` carries the id |
 | `IsRefused(route, addr)`, `IsFeeCollector(a)`, `FeeCollector(route)` | | `RouteJSON` |
@@ -685,11 +685,38 @@ an ERC20 escrowed on Ethereum with a voucher on gno.land), all amounts as `*big.
 |---|---|---|
 | `accounted_escrow` | **reconstructed from packet records**, never read as a total: every authenticated transfer send's amount (gno-native: the route's send records on gno.land; Ethereum-native: `sendRecord`s on Ethereum), **plus every paid recapitalization** (gno-native: `route_recapitalize{route, id, denom, amount, payer}` matched to an executed `NewRecapitalizeRequest` authorization by id and amount; Ethereum has none), **minus** every release: a receive paid out of escrow (Ethereum-native, on receive; gno-native, each claim installment and sweep payment), a refund paid (`route_refund`, `GnoRefundPaid`) | ADR §7.9: a paid recapitalization is "credited to accounted backing and debited from the unrecovered losses"; §7.11 first bullet. An **unpaid** authorization changes nothing, and a plain transfer into an escrow is surplus (§7.11), never backing |
 | `voucher_supply` | `GnoVoucher.totalSupply()` at `E` (gno-native, exact, proven). The gno voucher's supply at `G` (Ethereum-native) is read **exactly** from the token itself, never from the float64 page: `qeval` of the GRC20 ledger's `TotalSupply()` reached through the transfer realm's package-level voucher registry (an unexported store the pkgpath's own scope resolves; brittle across implementations, so the expression is pinned to the `ImplVersion` it was verified against) or §15 P1 once it lands; and, as the **independent check** that nothing minted outside the bridge, the supply is also rebuilt at the **token level** from the ledger's own mint and burn events over the complete history from both providers — every path included: receive credits paid by `Claim`, mint-denom **sweep payments** by decision, refund and reconciliation **re-mints**, returns burned by `VoucherSend` — and a token-level total that differs from the bridge's obligations is a break even when the realm's page agrees. A reconstruction from the bridge's own records (paid claims and returns) is **not** a supply: it omits sweeps and re-mints and cannot see an independent mint | |
-| `in_flight` | transfer sends whose receive is not at or below the other pin, or received with an error ack or past timeout whose ack/timeout the source has not processed at its pin | from the send records' outcome fields on both chains, reconstructed per packet (the `in_flight` total is a saturating view) |
-| `unpaid_refunds` | refund outcomes not yet paid: queued, parked, held by a `refunds` hold, re-mints pending | per record (`payment` queued/parked, `refunded < amount`); ADR: "a refund leaves this term only when paid" |
+| `in_flight` | transfer sends whose receive is not at or below the other pin, or received with an error ack or past timeout whose ack/timeout the source has not processed at its pin | per packet from the send records by the **classification below**, in which a settlement overrides the transport outcome (the `in_flight` total is a saturating view) |
+| `unpaid_refunds` | refund outcomes not yet paid: queued, parked, held by a `refunds` hold, re-mints pending | per record by the classification below: `amount − refunded` of a record whose refund is owed and not settled otherwise; ADR: "a refund leaves this term only when paid" |
 | `claims` | gno.land claims open, owed or withheld, plus sweep entries owed | per entry from the claims and sweeps pages: an open or withheld claim's remainder is **`amount − paid`** — the realm subtracts a reduction from `amount` itself (`reduce`: `c.Amount -= amount; c.Reduced += amount`; `Remaining() = Amount − Paid`), and `reduced` is a statistic, never subtracted again; an unpaid sweep entry's `amount` likewise already carries its reductions. The `Owed + Withheld + Swept` totals are exact and used as a cross-check |
 | `unrecovered_losses` | the loss ledger's open balance on the **payout chain** only, per (packet, token), never a mirror: gno.land, each loss of the losses page with `chain: gno`, less the paid recapitalizations and reductions booked against its incident (an accepted deficit lowers `unresolved`, not `unrecovered`); Ethereum, **`losses(route, token)` itself** (§4.2: no remedy exists there, and acceptance does not reduce it) | ADR §7.11, §7.12 "Cross-chain loss ownership" |
 | `balance` | the **physical** balance: gno.land `bank/balances/<realm>` or GRC20 `BalanceOf(realm)` (exact); Ethereum `ERC20.balanceOf(escrow)` | the "balances must cover it" rule |
+
+**Packet-term classification.** Each transfer send record is put in exactly one term from three fields read
+together — `settlement`, `payment` and `refunded` — and the transport `outcome` decides only while the record
+is unsettled, because a governed settlement writes `settlement` and `payment` whatever the transport said (a
+refund settled while the ack never came leaves `outcome` pending; `refunds.gno`: `r.Payment = PayReconciled; …
+r.Settlement = it.Action`):
+
+| `settlement` | then | term |
+|---|---|---|
+| 1 (refund paid or owed nothing more) | `payment: reconciled`, `refunded` is what was paid; a parked settlement refund has `payment: queued`/parked | released by `refunded`; the unpaid remainder `amount − refunded` is `unpaid_refunds` |
+| 2 (owed refund rejected), 3 (delivered) | nothing owed | settled: in the destination's supply (or released, if refunded before) |
+| 4 (forged refund) | the overpayment is a loss | released by `refunded`; the loss in the ledger |
+| 5 (forged receive, an inbound sequence) | — | the loss in the ledger; not a send term |
+| 0 and `outcome` pending | `payment` is none | **in flight**, `amount` |
+| 0 and `outcome` success | — | settled in the destination's supply |
+| 0 and `outcome` error or timeout | `payment` paid or claimed: released by `refunded` (= `amount`); queued or parked: **unpaid refund** `amount − refunded`; rejected: nothing owed | |
+
+The realm's own **open-record predicate** is `settlement == 0 && (outcome == "" || payment == queued)` and its
+**suspect-unsettled** one `processed_height ≥ suspectFrom && settlement == 0`; the fallbacks of §4.1 reproduce
+exactly these, never a looser one.
+
+**Backing releases are read from the records, not from events.** A refund paid at once emits `route_refund`,
+but a settlement's refund is paid by the governed path (`payOut` from `GovApply`, reported as the decision's
+`route_gov` event) and emits **no** `route_refund`; a parked settlement refund paid later by `ClaimRefunds`
+does. So `accounted_escrow` subtracts each record's `refunded` (whatever path paid it), each claim's `paid`
+(claims page; `route_claim` is the event), and each sweep entry's payout (`paid`, `claim_paid`), and adds each
+paid recapitalization — events are used to find changed records, never as the ledger.
 
 Identity (gno-native):
 `accounted_escrow_gno == voucher_supply_eth + in_flight + unpaid_refunds + claims_gno − unrecovered_losses`.
@@ -823,13 +850,24 @@ reconciled **continuously**, not only when a receive triggers it.
   initial and a genuine current state is a live break. Whenever a client is **discovered** (start-up, a new
   enrolled target, an opened recovery proposal, an executed installation) and whenever its route's **trust
   generation changes**, the monitor replays **from the client's deployment** — the constructor's state (its
-  height from the deployment transaction or the candidate's `ClientState`, its root by `getConsensusState`,
+  height from the deployment transaction or the candidate's `ClientState`, its tuple by `getConsensusState`,
   proven) and then every `ClientUpdated` and `LiveTransition` of the client in order, each compared with the
   own gno node as below — or from a **previously authenticated complete cursor** (a height up to which every
   retained state was already authenticated, persisted with the client's address and code hash). A genuine
   current head certifies nothing in between: the record is complete only when the cursor reaches the head, and
   an unresolved finding (a height above the observed gno head) is kept, never discarded by a later genuine
   update. Only then does the incremental record below continue from the cursor.
+- **The whole tuple, not the root.** A consensus state is `{timestamp, appHash, nextValidatorsHash}`, and the
+  **next validators hash is the trust-bearing field**: a candidate holding the genuine `appHash` beside an
+  attacker's `nextValidatorsHash` would accept that attacker's signing set at the next skip, and the constructor
+  emits no `LiveTransition` that would show it. Every state — constructor, every `ClientUpdated`, every retained
+  height — is therefore compared field by field with the own node's header at that height: `appHash` with
+  `app_hash`, `nextValidatorsHash` with `next_validators_hash`, and `timestamp` with the header's `time` at
+  **nanosecond** precision (the client stores unix nanoseconds; tm2's header time is RFC 3339 with nanoseconds).
+  A difference in any field is poisoned-client evidence, conclusive. The same holds for gno.land's Ethereum
+  clients: each retained state's `slot`, `timestamp` (= `genesis_time + slot · seconds_per_slot`), `state_root`
+  and the `current_sync_committee`/`next_sync_committee` summaries are compared with the beacon node's
+  light-client bootstrap and updates for that period, not the root alone.
 - **Ethereum's clients of gno.land** (the route's `GnoLightClient`, every enrolled kind 6 target, an open
   recovery's candidate): every `ClientUpdated{height, blockHash, appHash}` since the last evaluation, and the
   consensus state it installed (`getConsensusState(height)`, proven), is compared with the own gno node's header
@@ -936,6 +974,29 @@ pause flags (receives and escrowed sends); the route's `refunds` flag on **both*
 forgery is on the Ethereum side, `IBCAdmin`'s own flag. Everything else — stalls, ages, runways, failure to find a
 closed pair, surplus, provider disagreement, unresolved heights, a single-evaluation break — alarms only.
 
+### 7.10a Incident resolution: evidence stays, eligibility ends
+
+A confirmed orphan's receipt, a poisoned client's state and an old epoch's foreign decision remain historical
+facts after the route has been repaired by the runbook (§8): the algorithms above keep **finding** them. What
+they produce is therefore split in two: the **evidence**, which is forensic, stays in the store and on the
+dashboard for good; and the finding's **eligibility** for containment (§7.10, §8.4), which is `unresolved`
+until an **authenticated resolution** holds and `resolved` afterwards. A resolved finding is shown as such and
+creates **no** containment intent; a standing containment intent for it closes. Resolution is read from the
+chains, never declared by the operator:
+
+| Finding | Resolved when (every condition state-authenticated at a header-agreed, finalized pin) |
+|---|---|
+| confirmed orphan / forged receive entitlement (§7.4) | the client the receive was proven through is retired for transfers on **both** chains (gno `IsClientRetiredFor(id, "transfer")`, Ethereum `isRetired` by proof, or the gno client is not a route client any more), **and** the entitlement it created is terminal: the claim is `forged` or `done` with its loss booked, the sweep entry voided, or the receive settled by action 5 (`GnoSettled`), with the loss in the ledger |
+| fabricated root / poisoned client (§7.5, §7.6) | the client is retired on both chains and its route's epoch has been switched past it (gno `EpochClient() ≠ id`, Ethereum `EpochOpened` for the successor), or, for a candidate that was never installed, the recovery was cancelled / the kind 6 or 10 cancelled or spent |
+| foreign decision, forged ack, forged notice (§7.7) | the epoch that carried it is past on both chains (an authenticated epoch switch), or the decision is cancelled or spent and `IBCAdmin`'s flag has been cleared by governance (kind 2) or by its owner after the guardians acted; a forged ack: the dispatch recorded on Ethereum (a `Redispatch` landed) |
+| identity residual / cover shortfall (§7.3) | a later evaluation at a closed pair finds no residual and no shortfall, after the losses were booked, remedied or accepted and the route reopened (`closed` false, `loss_closed` false on both chains) |
+
+The dashboard shows resolved findings under the incident they belonged to, with the resolving facts and their
+provenance. **New exposure still triggers**: a receive proven through the replacement client, a new deficit
+booked after the reopening, a decision of the new epoch that gno.land never dispatched, each is a new finding
+with a new incident generation (§8.4), eligible on its own. The sink's "re-assert a flag cleared during a
+standing break" applies only while the break's findings are `unresolved`.
+
 ### 7.11 Readiness and freshness
 
 Every snapshot carries the collection it came from. A check evaluates only subjects whose snapshots are
@@ -1001,7 +1062,10 @@ pages anyone; a chain that stays unreadable does, through this path, since §7.1
 
 - Off by default. `autoflag.enabled: true` in the configuration file **and** the watch-key secrets in the
   environment (`IBCMON_GNO_WATCH_MNEMONIC`, `IBCMON_ETH_WATCH_PRIVATE_KEY`) are both required; either missing
-  refuses to start with `autoflag.enabled`. The public-instance mode refuses the sink.
+  refuses to start with `autoflag.enabled`. The public-instance mode refuses the sink. The API and the console
+  report the **requested** configuration (`off` / `dry-run` / `on`) and the **effective** status separately;
+  while the sink is not built (phases 1–2) the effective status is **`unavailable`** whatever was requested, and
+  the console never shows "on" or "dry run" unless the sink's checks actually execute.
 - **Rollout (§12):** the first production milestone is alarm-only with the sink in dry run; live signing is gated
   on the conditions of §12, not on a review of "a period".
 - **What the sink acts on**, every condition checked at the sink boundary, never assumed from the caller:
