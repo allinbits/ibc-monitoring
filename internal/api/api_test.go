@@ -134,12 +134,21 @@ func TestAPI(t *testing.T) {
 	}
 }
 
-// Freshness marking of the relationship view never writes into the stored
-// finding: concurrent readers of /routes and /checks, with results being
-// stored meanwhile, race on nothing (tenth round, finding 2; run under
-// -race).
+// fakeFresh is a pins value for the API: Ethereum fresh, gno.land not.
+type fakeFresh struct{}
+
+func (fakeFresh) Fresh(chain model.Chain, _ model.Provenance) bool {
+	return chain == model.ChainEthereum
+}
+
+// Freshness marking of the relationship view marks the response, never the
+// stored finding: concurrent readers of /routes and /checks, with results
+// being stored meanwhile, race on nothing (tenth round, finding 2; run
+// under -race), the response carries the gno provenance as stale and the
+// Ethereum one as fresh, and the stored evidence stays unmarked.
 func TestRoutesAndChecksConcurrently(t *testing.T) {
 	st := store.NewMemory(10)
+	st.PutSnapshot(store.Snapshot{Kind: store.KindPins, Key: "latest", Value: fakeFresh{}})
 	st.PutSnapshot(store.Snapshot{Kind: store.KindEthRoutes, Key: "client-0", Value: model.EthRoute{RouteKey: "client-0", GnoRoute: "ethereum-1"}, Provenance: model.Provenance{Chain: model.ChainEthereum, Collection: 1}})
 	st.PutSnapshot(store.Snapshot{Kind: store.KindGnoRoutes, Key: "ethereum-1", Value: model.Route{Key: "ethereum-1"}, Provenance: model.Provenance{Chain: model.ChainGno, Collection: 1}})
 	result := func(i int) model.CheckResult {
@@ -187,6 +196,24 @@ func TestRoutesAndChecksConcurrently(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+	// The response is marked by dependency: Ethereum fresh, gno.land stale.
+	resp, err := http.Get(srv.URL + "/api/v1/routes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var views []struct {
+		Relationship *RelationshipView `json:"relationship"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&views); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if len(views) != 1 || views[0].Relationship == nil || len(views[0].Relationship.Provenance) != 2 {
+		t.Fatalf("views %+v", views)
+	}
+	if p := views[0].Relationship.Provenance; p[0].Stale || !p[1].Stale {
+		t.Fatalf("response marking: ethereum stale=%v gno stale=%v", p[0].Stale, p[1].Stale)
+	}
 	// The stored finding's provenance was never marked stale in place.
 	r, _ := st.LatestResult("route_relationship")
 	for _, p := range r.Findings[0].Provenance {

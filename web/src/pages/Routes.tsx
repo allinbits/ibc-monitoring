@@ -285,18 +285,21 @@ function EthSide({ e }: { e: EthRoute }) {
           {e.route_hold && (
             <div>
               <Pill kind="bad">route hold</Pill> since {unix(e.route_hold.start)}; end unknown until
-              the flag and seat history establishes it: 24 h after the guardian flags dip below two
-              (the dip time is not exposed on chain), or at once when a guardian flag standing at
-              the dip loses its seat — a watch key's or an unrelated seat's replacement ends nothing
+              the flag and seat history establishes it: with no dip on record, at once when a
+              replacement retires one of the two flagging guardian keys; after a clear dipped the
+              flags below two, 24 h after that dip (its time is not exposed on chain) or at once
+              when a guardian flag standing at the dip loses its seat — a watch key's or an
+              unrelated seat's replacement ends nothing
             </div>
           )}
           {e.refunds_hold && (
             <div>
               <Pill kind="bad">refunds hold</Pill> since {unix(e.refunds_hold.start)}; end unknown
-              until the flag and seat history establishes it: 24 h after the guardian flags dip
-              below two (the dip time is not exposed on chain), or at once when a guardian flag
-              standing at the dip loses its seat — a watch key's or an unrelated seat's replacement
-              ends nothing
+              until the flag and seat history establishes it: with no dip on record, at once when a
+              replacement retires one of the two flagging guardian keys; after a clear dipped the
+              flags below two, 24 h after that dip (its time is not exposed on chain) or at once
+              when a guardian flag standing at the dip loses its seat — a watch key's or an
+              unrelated seat's replacement ends nothing
             </div>
           )}
         </dd>
