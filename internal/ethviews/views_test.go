@@ -16,13 +16,14 @@ import (
 )
 
 var (
-	adminAddr = common.HexToAddress("0x000000000000000000000000000000000000aaaa")
-	xferAddr  = common.HexToAddress("0x000000000000000000000000000000000000bbbb")
-	lcAddr    = common.HexToAddress("0x000000000000000000000000000000000000cccc")
-	tokenAddr = common.HexToAddress("0x000000000000000000000000000000000000dddd")
-	guardian0 = common.HexToAddress("0x0000000000000000000000000000000000000001")
-	guardian1 = common.HexToAddress("0x0000000000000000000000000000000000000002")
-	watch0    = common.HexToAddress("0x0000000000000000000000000000000000000005")
+	adminAddr  = common.HexToAddress("0x000000000000000000000000000000000000aaaa")
+	xferAddr   = common.HexToAddress("0x000000000000000000000000000000000000bbbb")
+	lcAddr     = common.HexToAddress("0x000000000000000000000000000000000000cccc")
+	routerAddr = common.HexToAddress("0x000000000000000000000000000000000000eeee")
+	tokenAddr  = common.HexToAddress("0x000000000000000000000000000000000000dddd")
+	guardian0  = common.HexToAddress("0x0000000000000000000000000000000000000001")
+	guardian1  = common.HexToAddress("0x0000000000000000000000000000000000000002")
+	watch0     = common.HexToAddress("0x0000000000000000000000000000000000000005")
 )
 
 const (
@@ -41,6 +42,13 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 	srv.Contract(adminAddr, admin, []byte{0x60, 0x80})
 	srv.Contract(xferAddr, xfer, []byte{0x60, 0x80})
 	srv.Contract(lcAddr, lc, []byte{0x60, 0x80})
+	srv.Contract(routerAddr, abi.MustLoad(abi.Router), []byte{0x60, 0x80})
+	srv.On(routerAddr, "getCounterparty", func(args []any) ([]any, error) {
+		if args[0].(string) != "client-0" {
+			return nil, errConsensus
+		}
+		return []any{counterpartyInfo{ClientId: "ethereum-1", MerklePrefix: [][]byte{[]byte("ibc")}}}, nil
+	})
 
 	keys := [6]common.Address{guardian0, guardian1, {}, {}, watch0, {}}
 	// IBCAdmin.
@@ -135,7 +143,7 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Close)
-	v, err := New(c, Addresses{Admin: adminAddr, Transfer: xferAddr, LightClient: lcAddr})
+	v, err := New(c, Addresses{Router: routerAddr, Admin: adminAddr, Transfer: xferAddr, LightClient: lcAddr})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +270,7 @@ func TestLightClient(t *testing.T) {
 	if !c.HeadTime.Equal(head) || !c.Expiry.Equal(head.Add(14*24*time.Hour)) {
 		t.Fatalf("expiry: %s %s", c.HeadTime, c.Expiry)
 	}
-	if c.Kind != model.ClientKindGnoLightClient || c.Address != lcAddr.Hex() || c.Role != "route" {
+	if c.Kind != model.ClientKindGnoLightClient || c.Address != lcAddr.Hex() || c.Role != "route" || c.CounterpartyID != "ethereum-1" {
 		t.Fatalf("client: %+v", c)
 	}
 	tr, err := v.LastTransition(context.Background(), lcAddr, b)

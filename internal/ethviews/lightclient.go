@@ -136,7 +136,32 @@ func (v *Views) LightClient(ctx context.Context, addr common.Address, routerID, 
 	default:
 		c.Status = model.ClientActive
 	}
+	if routerID != "" && v.addrs.Router != (common.Address{}) {
+		if c.CounterpartyID, err = v.counterparty(ctx, routerID, b); err != nil {
+			return c, err
+		}
+	}
 	return c, nil
+}
+
+// counterpartyInfo is IICS02ClientMsgs.CounterpartyInfo.
+type counterpartyInfo struct {
+	ClientId     string //nolint:revive // the ABI field name
+	MerklePrefix [][]byte
+}
+
+// counterparty reads the client id the router pairs a client with on the
+// counterparty chain (getCounterparty).
+func (v *Views) counterparty(ctx context.Context, clientID string, b ethrpc.Block) (string, error) {
+	out, err := v.call(ctx, v.addrs.Router, v.router, "getCounterparty", b, clientID)
+	if err != nil {
+		return "", fmt.Errorf("router counterparty of %s: %w", clientID, err)
+	}
+	info, ok := gethabi.ConvertType(out[0], new(counterpartyInfo)).(*counterpartyInfo)
+	if !ok {
+		return "", fmt.Errorf("router counterparty of %s: type %T", clientID, out[0])
+	}
+	return info.ClientId, nil
 }
 
 // Transition is the light client's last live validator-set transition.

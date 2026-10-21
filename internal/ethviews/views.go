@@ -38,6 +38,7 @@ type Views struct {
 	lc          *gethabi.ABI
 	erc20       *gethabi.ABI
 	exec        *gethabi.ABI
+	router      *gethabi.ABI
 }
 
 // New returns views over rpc.
@@ -57,6 +58,9 @@ func New(rpc *ethrpc.Client, addrs Addresses) (*Views, error) {
 		return nil, err
 	}
 	if v.exec, err = abi.Load(abi.AdminExec); err != nil {
+		return nil, err
+	}
+	if v.router, err = abi.Load(abi.Router); err != nil {
 		return nil, err
 	}
 	return v, nil
