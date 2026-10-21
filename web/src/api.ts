@@ -65,7 +65,6 @@ export interface Totals {
   sweep_paid: string;
   outstanding: string;
   returning: string;
-  parked: string;
   proven_owed: string;
   in_flight: string;
   sent: string;
@@ -100,11 +99,10 @@ export interface Denom {
   waiting: number;
   queued_refunds: number;
   totals: Totals;
-  /** The realm's escrow accounting (float64 on chain): exact only when lock_exact. */
+  /** The governed decimals of the voucher (0 for an unescrowed, gno-native denom). */
+  decimals: number;
+  /** The realm's escrow accounting (total_escrow), exact. */
   lock?: string;
-  lock_exact: boolean;
-  /** Totals that read as the int64 maximum: lower bounds, never exact amounts. */
-  saturated: string[];
 }
 
 export interface GnoRoute {
@@ -120,7 +118,6 @@ export interface GnoRoute {
   protected_recipients: string[];
   unrecovered: string;
   unresolved: string;
-  saturated: string[];
   denoms: Denom[];
   provenance: Provenance;
 }

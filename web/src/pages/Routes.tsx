@@ -12,30 +12,9 @@ import { decimalsOf, formatAmount, percent } from "../amount";
 import { Empty, Id, Loading, Pill, Provenance } from "../components";
 import { iso, unix } from "../time";
 
-function Amt({
-  v,
-  denom,
-  decimals,
-  saturated,
-}: {
-  v: string | undefined;
-  denom?: string;
-  decimals?: number;
-  /** True when the source reports this field as saturated (design §4.1); never inferred from the value. */
-  saturated?: boolean;
-}) {
+function Amt({ v, denom, decimals }: { v: string | undefined; denom?: string; decimals?: number }) {
   if (v === undefined) return <span className="muted">—</span>;
   const d = decimals ?? (denom ? decimalsOf(denom) : 0);
-  if (saturated) {
-    return (
-      <span
-        className="amt"
-        title="saturated: the realm's int64 view of a wider counter; a lower bound, not an exact amount, and unusable as an exact input"
-      >
-        ≥ {formatAmount(v, d)} <Pill kind="warn">saturated</Pill>
-      </span>
-    );
-  }
   return (
     <span className="amt" title={`${v} base units`}>
       {formatAmount(v, d)}
@@ -55,18 +34,29 @@ function MeterBar({ level, cap }: { level?: string; cap?: string }) {
 }
 
 /** A gno.land meter: the stored level, and the live level only from an exact source. */
-function GnoMeter({ m, denom, cap }: { m: Meter; denom: string; cap?: string }) {
+function GnoMeter({
+  m,
+  denom,
+  decimals,
+  cap,
+}: {
+  m: Meter;
+  denom: string;
+  decimals?: number;
+  cap?: string;
+}) {
   return (
     <>
       <div>
-        stored <Amt v={m.level} denom={denom} />{" "}
+        stored <Amt v={m.level} denom={denom} decimals={decimals} />{" "}
         <span className="muted small">at {unix(m.at)}</span>
       </div>
       <div>
         live{" "}
         {m.live !== undefined ? (
           <>
-            <Amt v={m.live} denom={denom} /> <span className="muted small">({m.live_source})</span>
+            <Amt v={m.live} denom={denom} decimals={decimals} />{" "}
+            <span className="muted small">({m.live_source})</span>
           </>
         ) : (
           <span className="muted" title={m.live_reason}>
@@ -76,7 +66,7 @@ function GnoMeter({ m, denom, cap }: { m: Meter; denom: string; cap?: string }) 
       </div>
       {cap && (
         <div className="muted small">
-          cap <Amt v={cap} denom={denom} />
+          cap <Amt v={cap} denom={denom} decimals={decimals} />
         </div>
       )}
     </>
@@ -85,93 +75,80 @@ function GnoMeter({ m, denom, cap }: { m: Meter; denom: string; cap?: string }) 
 
 function DenomRow({ d }: { d: Denom }) {
   const t = d.totals;
+  // a minted denom's amounts are in its voucher's governed decimals; an unescrowed one's in its gno denom's
+  const dec = d.kind === "mint" ? d.decimals : decimalsOf(d.denom);
   return (
     <tr>
       <td>
         <strong>{d.denom}</strong>
-        <div className="muted small">{d.kind}</div>
+        <div className="muted small">
+          {d.kind} · {d.decimals} decimals
+        </div>
         <div className="small">
           token <Id v={d.token} />
         </div>
         {d.trace && <div className="muted small">{d.trace}</div>}
       </td>
       <td>
-        <GnoMeter m={d.meter} denom={d.denom} />
+        <GnoMeter m={d.meter} denom={d.denom} decimals={dec} />
         <div className="muted small">
-          cap floor <Amt v={d.cap_floor} denom={d.denom} /> · epoch {d.meter.epoch ?? 0}
+          cap floor <Amt v={d.cap_floor} denom={d.denom} decimals={dec} /> · epoch{" "}
+          {d.meter.epoch ?? 0}
         </div>
       </td>
       <td>
-        <GnoMeter m={d.refund_meter} denom={d.denom} cap={d.refund_cap} />
+        <GnoMeter m={d.refund_meter} denom={d.denom} decimals={dec} cap={d.refund_cap} />
         <div className="muted small">
-          {d.queued_refunds} queued ·{" "}
-          <Amt
-            v={t.queued_refunds}
-            denom={d.denom}
-            saturated={d.saturated?.includes("queued_refunds")}
-          />{" "}
-          · parked <Amt v={t.parked} denom={d.denom} saturated={d.saturated?.includes("parked")} />
+          {d.queued_refunds} queued · <Amt v={t.queued_refunds} denom={d.denom} decimals={dec} />
         </div>
       </td>
       <td>
         <div>
-          escrow accounting <Amt v={d.lock} denom={d.denom} />{" "}
-          {!d.lock_exact && (
-            <Pill kind="warn" title="float64 on chain: exact only below 2^53">
-              inexact
-            </Pill>
-          )}
+          escrow accounting <Amt v={d.lock} denom={d.denom} decimals={dec} />
         </div>
         <div className="muted small">
-          supply cap <Amt v={d.supply_cap} denom={d.denom} /> · outstanding{" "}
-          <Amt v={t.outstanding} denom={d.denom} />
+          supply cap <Amt v={d.supply_cap} denom={d.denom} decimals={dec} /> · outstanding{" "}
+          <Amt v={t.outstanding} denom={d.denom} decimals={dec} />
         </div>
       </td>
       <td>
         <div>
-          owed <Amt v={t.owed} denom={d.denom} /> · withheld <Amt v={t.withheld} denom={d.denom} />
+          owed <Amt v={t.owed} denom={d.denom} decimals={dec} /> · withheld{" "}
+          <Amt v={t.withheld} denom={d.denom} decimals={dec} />
         </div>
         <div className="muted small">
-          {d.waiting} waiting · swept <Amt v={t.swept} denom={d.denom} /> · paid{" "}
-          <Amt v={t.paid} denom={d.denom} saturated={d.saturated?.includes("paid")} />
+          {d.waiting} waiting · swept <Amt v={t.swept} denom={d.denom} decimals={dec} /> · paid{" "}
+          <Amt v={t.paid} denom={d.denom} decimals={dec} />
         </div>
       </td>
       <td>
         <div>
-          in flight{" "}
-          <Amt v={t.in_flight} denom={d.denom} saturated={d.saturated?.includes("in_flight")} />
+          in flight <Amt v={t.in_flight} denom={d.denom} decimals={dec} />
         </div>
         <div className="muted small">
-          sent <Amt v={t.sent} denom={d.denom} saturated={d.saturated?.includes("sent")} /> ·
-          refunded{" "}
-          <Amt v={t.refunded} denom={d.denom} saturated={d.saturated?.includes("refunded")} />
+          sent <Amt v={t.sent} denom={d.denom} decimals={dec} /> · refunded{" "}
+          <Amt v={t.refunded} denom={d.denom} decimals={dec} />
         </div>
       </td>
       <td>
         <div>
-          lost <Amt v={t.lost} denom={d.denom} saturated={d.saturated?.includes("lost")} /> ·
-          unrecovered{" "}
-          <Amt v={t.unrecovered} denom={d.denom} saturated={d.saturated?.includes("unrecovered")} />
+          lost <Amt v={t.lost} denom={d.denom} decimals={dec} /> · unrecovered{" "}
+          <Amt v={t.unrecovered} denom={d.denom} decimals={dec} />
         </div>
         <div className="muted small">
-          recap{" "}
-          <Amt
-            v={t.recapitalized}
-            denom={d.denom}
-            saturated={d.saturated?.includes("recapitalized")}
-          />{" "}
-          · reduced{" "}
-          <Amt v={t.reduced} denom={d.denom} saturated={d.saturated?.includes("reduced")} /> ·
-          accepted{" "}
-          <Amt v={t.accepted} denom={d.denom} saturated={d.saturated?.includes("accepted")} />
+          recap <Amt v={t.recapitalized} denom={d.denom} decimals={dec} /> · reduced{" "}
+          <Amt v={t.reduced} denom={d.denom} decimals={dec} /> · accepted{" "}
+          <Amt v={t.accepted} denom={d.denom} decimals={dec} />
         </div>
       </td>
       <td>
         <div className="muted small">
-          fee <Amt v={d.fee} denom={d.denom} /> (floor <Amt v={d.fee_floor} denom={d.denom} />)
+          fee <Amt v={d.fee} denom={d.denom} decimals={dec} /> (floor{" "}
+          <Amt v={d.fee_floor} denom={d.denom} decimals={dec} />)
         </div>
         <div className="muted small">
-          send <Amt v={d.send_min} denom={d.denom} />–<Amt v={d.send_max} denom={d.denom} />
+          send <Amt v={d.send_min} denom={d.denom} decimals={dec} />–
+          <Amt v={d.send_max} denom={d.denom} decimals={dec} />
         </div>
       </td>
     </tr>
@@ -207,8 +184,7 @@ function GnoSide({ r }: { r: GnoRoute }) {
         </dd>
         <dt>unrecovered / unresolved</dt>
         <dd>
-          <Amt v={r.unrecovered} saturated={r.saturated?.includes("unrecovered")} /> /{" "}
-          <Amt v={r.unresolved} saturated={r.saturated?.includes("unresolved")} />
+          <Amt v={r.unrecovered} /> / <Amt v={r.unresolved} />
         </dd>
       </dl>
       <table>

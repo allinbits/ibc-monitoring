@@ -99,8 +99,8 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("denoms %d", len(r.Denoms))
 	}
 	ugnot := r.Denoms[0]
-	if ugnot.Kind != "unescrow" || ugnot.Lock == nil || ugnot.Lock.String() != "200000000000" || !ugnot.LockExact {
-		t.Fatalf("ugnot lock: %+v", ugnot.Lock)
+	if ugnot.Kind != "unescrow" || ugnot.Lock == nil || ugnot.Lock.String() != "200000000000" || ugnot.Decimals != 0 {
+		t.Fatalf("ugnot lock: %+v decimals %d", ugnot.Lock, ugnot.Decimals)
 	}
 	if ugnot.Token != "0x4ed7c70f96b99c776995fb64377f0d4ab3b0e1c1" || ugnot.Trace != "" {
 		t.Fatalf("ugnot token: %q %q", ugnot.Token, ugnot.Trace)
@@ -119,7 +119,7 @@ func TestRoutes(t *testing.T) {
 		t.Fatalf("totals %+v", ugnot.Totals)
 	}
 	mint := r.Denoms[1]
-	if mint.Kind != "mint" || mint.SupplyCap.String() != "9000000000000000000" || mint.QueuedRefunds != 2 {
+	if mint.Kind != "mint" || mint.SupplyCap.String() != "9000000000000000000" || mint.QueuedRefunds != 2 || mint.Decimals != 18 {
 		t.Fatalf("mint: %+v", mint)
 	}
 	// A minted denom has no remote: its token is the trace base, lower-cased,
@@ -127,18 +127,12 @@ func TestRoutes(t *testing.T) {
 	if mint.Remote != "" || mint.Token != "0xdac17f958d2ee523a2206206994597c13d831ec7" || mint.Trace != "transfer/ethereum-1" {
 		t.Fatalf("mint token: %+v", mint)
 	}
-	if mint.Lock.String() != "0" || !mint.LockExact {
+	if mint.Lock.String() != "0" {
 		t.Fatalf("mint lock %s", mint.Lock)
 	}
-	// Saturated counters are flagged as lower bounds, never read as exact.
-	if len(ugnot.Saturated) != 0 || len(mint.Saturated) != 2 || mint.Saturated[0] != "in_flight" || mint.Saturated[1] != "lost" {
-		t.Fatalf("saturated: %v %v", ugnot.Saturated, mint.Saturated)
-	}
-	if mint.Totals.InFlight.String() != model.Int64Max {
-		t.Fatalf("saturated value %s", mint.Totals.InFlight)
-	}
-	if len(r.Saturated) != 0 {
-		t.Fatalf("route saturated %v", r.Saturated)
+	// Totals are decimal strings on chain, exact past int64 (ADR 0005): 2^64.
+	if mint.Totals.InFlight.String() != "18446744073709551616" || mint.Totals.Lost.String() != "18446744073709551616" {
+		t.Fatalf("wide totals %s %s", mint.Totals.InFlight, mint.Totals.Lost)
 	}
 	if len(srv.Unknown) != 0 {
 		t.Fatalf("queries missing from the fixture: %v", srv.Unknown)

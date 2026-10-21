@@ -31,7 +31,6 @@ type Totals struct {
 	SweepPaid     Amount `json:"sweep_paid"`
 	Outstanding   Amount `json:"outstanding"`
 	Returning     Amount `json:"returning"`
-	Parked        Amount `json:"parked"`
 	ProvenOwed    Amount `json:"proven_owed"`
 	InFlight      Amount `json:"in_flight"`
 	Sent          Amount `json:"sent"`
@@ -59,6 +58,9 @@ type Denom struct {
 	SendMin        Amount `json:"send_min"`
 	RefundCap      Amount `json:"refund_cap"`
 	Remote         string `json:"remote"`
+	// Decimals is the governed decimals of the denom's voucher on gno.land
+	// (fixed when the voucher is first minted); 0 for an unescrowed denom.
+	Decimals int `json:"decimals"`
 	// Token is the denom's ERC20 on Ethereum: Remote for an unescrow denom;
 	// for a minted denom the base of its denom trace (denoms/ibc/<hash>),
 	// since Remote is empty there by the realm's rule (design §4.1).
@@ -72,38 +74,26 @@ type Denom struct {
 	QueuedRefunds int64  `json:"queued_refunds"`
 	Totals        Totals `json:"totals"`
 	// Lock is the realm's escrow accounting of the denom for this route
-	// (total_escrow), 0 for mint. The realm emits it through float64, so it
-	// is exact only below 2^53 (LockExact); it is never an identity term.
-	Lock      *Amount `json:"lock,omitempty"`
-	LockExact bool    `json:"lock_exact"`
-	// Saturated names the totals that read as the int64 maximum: the realm
-	// keeps those counters wide and their int64 views saturate, so such a
-	// value is a lower bound, never an exact amount (design §4.1).
-	Saturated []string `json:"saturated"`
+	// (total_escrow), exact; 0 for mint.
+	Lock *Amount `json:"lock,omitempty"`
 }
-
-// Int64Max is the saturating counters' ceiling.
-const Int64Max = "9223372036854775807"
 
 // Route is a gno.land Ethereum route as the transfer realm reports it.
 type Route struct {
-	Key                 string    `json:"route"`
-	Client              string    `json:"client"`
-	Replaced            []string  `json:"replaced"`
-	Enrolled            time.Time `json:"enrolled"`
-	Activated           uint64    `json:"activated"`
-	Closed              bool      `json:"closed"`
-	LossClosed          bool      `json:"loss_closed"`
-	FeeCollector        string    `json:"fee_collector"`
-	RefusedRecipients   []string  `json:"refused_recipients"`
-	ProtectedRecipients []string  `json:"protected_recipients"`
-	Unrecovered         Amount    `json:"unrecovered"`
-	Unresolved          Amount    `json:"unresolved"`
-	// Saturated names the route totals (unrecovered, unresolved) that read
-	// as the int64 maximum: lower bounds, not exact amounts.
-	Saturated  []string   `json:"saturated"`
-	Denoms     []Denom    `json:"denoms"`
-	Provenance Provenance `json:"provenance"`
+	Key                 string     `json:"route"`
+	Client              string     `json:"client"`
+	Replaced            []string   `json:"replaced"`
+	Enrolled            time.Time  `json:"enrolled"`
+	Activated           uint64     `json:"activated"`
+	Closed              bool       `json:"closed"`
+	LossClosed          bool       `json:"loss_closed"`
+	FeeCollector        string     `json:"fee_collector"`
+	RefusedRecipients   []string   `json:"refused_recipients"`
+	ProtectedRecipients []string   `json:"protected_recipients"`
+	Unrecovered         Amount     `json:"unrecovered"`
+	Unresolved          Amount     `json:"unresolved"`
+	Denoms              []Denom    `json:"denoms"`
+	Provenance          Provenance `json:"provenance"`
 }
 
 // EthFlag is a standing flag on Ethereum (zero values: not standing).

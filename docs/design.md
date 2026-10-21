@@ -288,10 +288,10 @@ the identity may not rest on them:
 | Value | Where | Limit | Consequence |
 |---|---|---|---|
 | core heights, sequences, timestamps | core Render JSON | built from `float64`: exact to 2^53 | fine for heights; packet sequences are read from the controls pages and events instead |
-| **`total_escrow` amounts** (per client and total) | transfer v0 `TotalEscrowForDenom` | `float64(int64)`: exact only to 2^53 (≈ 9.0 × 10^15 base units, 9 billion GNOT) | **not an identity term above 2^53**; the obligation is reconstructed from records (§7.1), or read exactly once §15 P1 lands |
-| **voucher `total_supply`**, `decimals`, voucher balances | transfer v0 `VoucherJSON`, `VoucherBalance` | `float64` | the gno voucher supply of an Ethereum-native denom is **unavailable** as an identity term above 2^53 until §15 P1 (`VoucherBalanceOf` is exact but needs the holder set) |
-| `in_flight`, `returning`, `queued_refunds`, `parked`, `proven_owed`, `unrecovered`, `unresolved` | controls `Totals` | **saturating int64 views** of wide counters (`arith.gno`): exact below 2^63, the maximum above | a value equal to the int64 maximum is carried through the model and the API as **saturated** (`saturated: [field…]`), shown as "≥ 9,223,372,036,854,775,807 (saturated)" — a lower bound, never an exact amount — and refused as an exact input by every algorithm; §7.1 reconstructs these from records |
-| `credited`, `paid`, `fees`, `sweep_paid`, `sent`, `send_fees`, `refunded`, `lost`, `recapitalized`, `reduced`, `accepted` | controls `Totals` | saturating lifetime statistics (`statAdd`, `arith.gno`: "it saturates, and the JSON shows the maximum"), "never read by a check" | dashboard only, flagged in `saturated` like the views above. Saturation is **per source and per field**: the gno denom and route objects name the fields read at the int64 maximum; an Ethereum `uint256` is never saturated, and no display infers saturation from a value — only from the field's own flag |
+| **`total_escrow` amounts** (per client and total) | transfer `TotalEscrowForDenom` | decimal strings, exact (`uint256` since gno-realms ADR 0005) | an exact term |
+| **voucher `total_supply`**, `decimals`, voucher balances | transfer `VoucherJSON`, `VoucherBalance` | decimal strings, exact; `decimals` is the governed value fixed when the voucher was first minted | exact terms |
+| `in_flight`, `returning`, `queued_refunds`, `proven_owed`, `unrecovered`, `unresolved` | controls `Totals` | decimal strings of 256-bit counters, exact (ADR 0005: the saturating int64 views are gone, and so is `parked`) | exact terms |
+| `credited`, `paid`, `fees`, `sweep_paid`, `sent`, `send_fees`, `refunded`, `lost`, `recapitalized`, `reduced`, `accepted` | controls `Totals` | decimal strings, exact lifetime statistics, "never read by a check" | dashboard only |
 | everything else in the controls JSON | `itoa(int64)` | exact | |
 | Ethereum views | `uint256` | exact | |
 
@@ -332,7 +332,7 @@ Ethereum `expired when currentSlot > latestSlot + 8 · epochs_per_sync_committee
 | Read | How | Gives |
 |---|---|---|
 | routes | `qrender routes` → `[RouteJSON]`; `qrender routes/<R>` → `RouteJSON` or `null` | `route`, `client`, `replaced[]` (every retired client, in order), `enrolled` (unix), `activated` (height), `closed`, `loss_closed`, `fee_collector`, `refused_recipients[]`, `protected_recipients[]`, `unrecovered`, `unresolved`, `denoms[]` |
-| denom | in `RouteJSON.denoms[]` | `denom`, `kind` (`unescrow`/`mint`), `cap_floor`, `launch_cap_floor`, `supply_cap`, `fee`, `fee_floor`, `send_max`, `send_min`, `refund_cap`, `remote` (the ERC20), `meter{level, at, epoch}`, `refund_meter{level, at}` (**stored** levels, as of the last refill), `waiting` (recipients with an open claim), `queued_refunds` (entries), `totals{credited, owed, withheld, swept, paid, fees, sweep_paid, outstanding, returning, parked, proven_owed, in_flight, sent, send_fees, refunded, queued_refunds, lost, recapitalized, reduced, accepted, unrecovered, unresolved}` |
+| denom | in `RouteJSON.denoms[]` | `denom`, `kind` (`unescrow`/`mint`), `cap_floor`, `launch_cap_floor`, `supply_cap`, `fee`, `fee_floor`, `send_max`, `send_min`, `refund_cap`, `remote` (the ERC20), `decimals` (the voucher's governed decimals, 0 for unescrow), `meter{level, at, epoch}`, `refund_meter{level, at}` (**stored** levels, as of the last refill), `waiting` (recipients with an open claim), `queued_refunds` (entries), `totals{credited, owed, withheld, swept, paid, fees, sweep_paid, outstanding, returning, parked, proven_owed, in_flight, sent, send_fees, refunded, queued_refunds, lost, recapitalized, reduced, accepted, unrecovered, unresolved}` |
 | claims | `qrender routes/<R>/claims?from=<cursor>` → `{entries[], next}` (≤ 100 per page, `next == ""` at the end; cursor inclusive) | `key` (`client/<20-digit seq>`), `denom`, `to`, `amount`, `paid`, `reduced`, `fee`, `state` (`open`/`withheld`/`forged`/`done`), `by` (`packet`/`vote`), `at`, `height`, `seq` |
 | sweeps | `qrender routes/<R>/sweeps?from=` | `key`, `denom`, `to`, `amount`, `reduced`, `reason`, `height`, `voided`, `paid`, `paid_to`, `from_claim?`, `claim_paid?` |
 | sends (send records) | `qrender routes/<R>/sends?from=` | `key`, `packet{sequence, source_client, destination_client, timeout_timestamp, payloads[{source_port, destination_port, version, encoding, value (hex)}]}`, `commitment` (hex), `sender`, `receiver`, `denom`, `kind`, `amount`, `fee`, `sent_height`, `sent_at`, `outcome` (`""`/`success`/`error`/`timeout`), `processed_height`, `processed_at`, `payment` (`""`/`paid`/`queued`/`claimed`/`rejected`/`reconciled`), `refunded`, `settlement` (0–5), `reservation`, `proven`, `proven_at`, `proven_by`, `proven_gen`, `incident` |
@@ -519,12 +519,12 @@ One page per route key, both chains side by side.
   trace base for `mint`), caps and fees, the **stored** meter level with its time and the **live** level only when
   an exact source gives it (`Reader.Meters`), otherwise "live: unavailable" with the reason; refund meter likewise;
   Ethereum `limits` with live `receiveLevel` and `refundLevel` (exact); the Ethereum escrow balance and voucher
-  supply; the gno physical balance (exact), the escrow accounting (`total_escrow`, marked float64) and the voucher
-  supply (marked float64); `totals` with saturated values marked.
+  supply; the gno physical balance, the escrow accounting (`total_escrow`) and the voucher supply, all exact
+  decimal strings; the voucher's governed `decimals`; `totals`.
 - **Quarantine:** armed, duration, `quarantineEnd`, the last `LiveTransition`.
 - **Claims:** open, withheld, forged, done, paged; sweep entries; per recipient the live recipient meter.
-- **Refunds:** queued (gno `queued_refunds`; Ethereum `refundQueue` and the queued/parked records), parked, held by
-  a `refunds` hold, with ages.
+- **Refunds:** queued (gno `queued_refunds`; Ethereum `refundQueue` and the queued/parked records), held by a
+  `refunds` hold, with ages (gno.land no longer parks a minted settlement refund: it is paid at once, ADR 0005).
 - **Sends and send records:** paged, filterable by outcome, payment, settlement, proven state; the orphan test
   verdict per receive once the monitor evaluated it.
 - **Losses and deficits:** the loss ledger per denom with `chain` (authoritative vs mirror), recapitalizations
@@ -773,8 +773,8 @@ guaranteed for: on Ethereum from the fork's first send (the fork is the proxy's 
 Ethereum send has a record), on gno.land from the route's activation; a receive naming an earlier sequence is a
 legacy packet of the cut and is judged by the core's commitment at the cut, never by a record's absence.
 
-An identity or cover whose terms include an `unavailable` value (a saturated total, a float64 supply beyond 2^53,
-an unauthenticated record, a missing opening cut) is **not evaluated**: the check skips with the reason, which
+An identity or cover whose terms include an `unavailable` value (an unauthenticated record, a missing opening
+cut) is **not evaluated**: the check skips with the reason, which
 counts toward the deferred alarm (§8.3). A term is never guessed.
 
 ### 7.2 Closed pairs (`closed_pair`)
@@ -1594,10 +1594,10 @@ review (§12); the convenience items below are never a release dependency.
 **P1. Exact amounts in the transfer realm's JSON (gno-realms).** `total_escrow/<denom>` and
 `vouchers`/`voucher/ibc/<hash>` emit `float64`-built numbers; emit them as integers or decimal strings.
 
-**P2. Exact or reconstructible liabilities (gno-realms).** `Totals.InFlight`, `Returning`, `QueuedRefunds`,
-`Parked`, `ProvenOwed`, `OpenUnrecovered` and `OpenUnresolved` are saturating int64 views; emit the wide values
-(two limbs or a decimal string) and the incident balances (`IncidentTotals`), and keep every per-packet record
-replayable until a pruning policy says otherwise.
+**P2. Exact or reconstructible liabilities (gno-realms).** Landed with gno-realms ADR 0005: every total is a
+256-bit value rendered as a decimal string (`Parked` is gone with the minted refunds' parking). Still wanted: the
+incident balances (`IncidentTotals`), and every per-packet record kept replayable until a pruning policy says
+otherwise.
 
 **P3. Live meters from the realm (gno-realms).** Export `Meters(route, denom, to)` or put `meter.live`,
 `refund_meter.live` and the recipient meters in `RouteJSON`.

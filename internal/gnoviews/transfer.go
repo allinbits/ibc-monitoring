@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
-	"sort"
 	"strings"
 	"time"
 
@@ -14,8 +12,10 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/model"
 )
 
-// Shapes of p/aib/ibc/ics20/controls/v0 reader.gno. Every integer is a bare
-// JSON number holding an int64 exactly; json.Number keeps the text.
+// Shapes of p/aib/ibc/ics20/controls/v0 reader.gno. Every amount is a decimal
+// JSON string (a 256-bit value is lossy as a JSON number: gno-realms ADR
+// 0005); heights, times and counts are bare JSON numbers. json.Number keeps
+// the text of either, and amount parses it exactly.
 type routeJSON struct {
 	Route               string      `json:"route"`
 	Client              string      `json:"client"`
@@ -50,6 +50,7 @@ type denomJSON struct {
 	SendMin        json.Number            `json:"send_min"`
 	RefundCap      json.Number            `json:"refund_cap"`
 	Remote         string                 `json:"remote"`
+	Decimals       json.Number            `json:"decimals"`
 	Meter          meterJSON              `json:"meter"`
 	RefundMeter    meterJSON              `json:"refund_meter"`
 	Waiting        json.Number            `json:"waiting"`
@@ -57,8 +58,8 @@ type denomJSON struct {
 	Totals         map[string]json.Number `json:"totals"`
 }
 
-// totalEscrowJSON is the transfer v0 total_escrow/<denom> document. Its
-// amounts are built from float64 on chain (design §4.1): exact below 2^53.
+// totalEscrowJSON is the transfer total_escrow/<denom> document; its amounts
+// are decimal strings, exact.
 type totalEscrowJSON struct {
 	Denom   string      `json:"denom"`
 	Amount  json.Number `json:"amount"`
@@ -77,10 +78,6 @@ type denomTraceJSON struct {
 
 // MeterLiveUnavailable is the reason the live level is not computed here.
 const MeterLiveUnavailable = "no exact source: the realm's refill depends on the payouts-epoch reset, the fractional remainder and the stored rate and ceiling (design §4.1)"
-
-// float64Exact is the largest integer a float64-built JSON number can carry
-// exactly (2^53).
-var float64Exact = new(big.Int).Lsh(big.NewInt(1), 53)
 
 // Routes reads every Ethereum route of the transfer realm with each denom's
 // Ethereum token resolved (the remote address for an unescrow denom, the
@@ -142,13 +139,6 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 	if r.Unresolved, err = amount(rj.Unresolved); err != nil {
 		return r, err
 	}
-	r.Saturated = []string{}
-	if rj.Unrecovered.String() == model.Int64Max {
-		r.Saturated = append(r.Saturated, "unrecovered")
-	}
-	if rj.Unresolved.String() == model.Int64Max {
-		r.Saturated = append(r.Saturated, "unresolved")
-	}
 	routeClients := append([]string{rj.Client}, rj.Replaced...)
 	for _, dj := range rj.Denoms {
 		d, err := parseDenom(dj)
@@ -158,11 +148,11 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 		switch d.Kind {
 		case "unescrow":
 			d.Token = strings.ToLower(d.Remote)
-			lock, exact, err := v.lock(ctx, rj.Route, d.Denom, p)
+			lock, err := v.lock(ctx, rj.Route, d.Denom, p)
 			if err != nil {
 				return r, err
 			}
-			d.Lock, d.LockExact = &lock, exact
+			d.Lock = &lock
 		case "mint":
 			token, trace, err := v.denomTrace(ctx, d.Denom, routeClients, p)
 			if err != nil {
@@ -170,7 +160,7 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 			}
 			d.Token, d.Trace = token, trace
 			zero := model.AmountFromInt64(0)
-			d.Lock, d.LockExact = &zero, true
+			d.Lock = &zero
 		}
 		r.Denoms = append(r.Denoms, d)
 	}
@@ -188,23 +178,19 @@ func nonNil(s []string) []string {
 }
 
 // lock reads the route's escrow accounting of a denom from
-// total_escrow/<denom> and says whether the value is below the float64 limit.
-func (v *Views) lock(ctx context.Context, route, denom string, p Pin) (model.Amount, bool, error) {
+// total_escrow/<denom> (exact: a decimal string on chain).
+func (v *Views) lock(ctx context.Context, route, denom string, p Pin) (model.Amount, error) {
 	var te totalEscrowJSON
 	if err := v.renderJSON(ctx, v.paths.Transfer, "total_escrow/"+denom, p, &te); err != nil {
-		return model.Amount{}, false, err
+		return model.Amount{}, err
 	}
 	for _, c := range te.Clients {
 		if c.Client != route {
 			continue
 		}
-		a, err := amount(c.Amount)
-		if err != nil {
-			return model.Amount{}, false, err
-		}
-		return a, a.Int().Cmp(float64Exact) < 0, nil
+		return amount(c.Amount)
 	}
-	return model.AmountFromInt64(0), true, nil
+	return model.AmountFromInt64(0), nil
 }
 
 // denomTrace resolves a minted denom (ibc/<hash>) to its Ethereum token: the
@@ -274,32 +260,40 @@ func parseDenom(dj denomJSON) (model.Denom, error) {
 	if d.QueuedRefunds, err = num(dj.QueuedRefunds); err != nil {
 		return d, err
 	}
+	// decimals is the governed decimals of the denom's voucher (0 for an
+	// unescrowed denom, whose token is gno-native).
+	if dj.Decimals != "" {
+		dec, err := num(dj.Decimals)
+		if err != nil {
+			return d, fmt.Errorf("decimals: %w", err)
+		}
+		if dec < 0 || dec > 255 {
+			return d, fmt.Errorf("decimals %d out of range", dec)
+		}
+		d.Decimals = int(dec)
+	}
 	totals := map[string]*model.Amount{
 		"credited": &d.Totals.Credited, "owed": &d.Totals.Owed, "withheld": &d.Totals.Withheld,
 		"swept": &d.Totals.Swept, "paid": &d.Totals.Paid, "fees": &d.Totals.Fees,
 		"sweep_paid": &d.Totals.SweepPaid, "outstanding": &d.Totals.Outstanding,
-		"returning": &d.Totals.Returning, "parked": &d.Totals.Parked, "proven_owed": &d.Totals.ProvenOwed,
+		"returning": &d.Totals.Returning, "proven_owed": &d.Totals.ProvenOwed,
 		"in_flight": &d.Totals.InFlight, "sent": &d.Totals.Sent, "send_fees": &d.Totals.SendFees,
 		"refunded": &d.Totals.Refunded, "queued_refunds": &d.Totals.QueuedRefunds, "lost": &d.Totals.Lost,
 		"recapitalized": &d.Totals.Recapitalized, "reduced": &d.Totals.Reduced, "accepted": &d.Totals.Accepted,
 		"unrecovered": &d.Totals.Unrecovered, "unresolved": &d.Totals.Unresolved,
 	}
-	d.Saturated = []string{}
+	// Every total is a 256-bit value rendered exactly (no saturating int64
+	// view since gno-realms ADR 0005); a key the realm no longer renders
+	// (parked, gone with the minted refunds' parking) would read as zero.
 	for k, dst := range totals {
-		if *dst, err = amount(dj.Totals[k]); err != nil {
+		n, ok := dj.Totals[k]
+		if !ok {
+			return d, fmt.Errorf("totals.%s: missing", k)
+		}
+		if *dst, err = amount(n); err != nil {
 			return d, fmt.Errorf("totals.%s: %w", k, err)
 		}
 	}
-	// The wide counters' int64 views and the statAdd statistics saturate at
-	// the maximum (arith.gno): such a value is a lower bound and is flagged
-	// per field, never used as an exact amount. Owed, withheld, swept and
-	// outstanding are checked sums, exact by construction.
-	for _, k := range []string{"in_flight", "returning", "queued_refunds", "parked", "proven_owed", "unrecovered", "unresolved", "credited", "paid", "fees", "sweep_paid", "sent", "send_fees", "refunded", "lost", "recapitalized", "reduced", "accepted"} {
-		if dj.Totals[k].String() == model.Int64Max {
-			d.Saturated = append(d.Saturated, k)
-		}
-	}
-	sort.Strings(d.Saturated)
 	return d, nil
 }
 
