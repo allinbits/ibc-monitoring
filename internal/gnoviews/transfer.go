@@ -155,10 +155,17 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 			d.Lock = &lock
 		case "mint":
 			token, trace, err := v.denomTrace(ctx, d.Denom, routeClients, p)
-			if err != nil {
+			switch {
+			case err == nil:
+				d.Token, d.Trace = token, trace
+			case isNotFound(err) && v.noVoucher(ctx, d.Denom, p):
+				// Configured but never received: the realm records the
+				// trace and creates the voucher on the first receive, so
+				// there is no token to watch yet and nothing minted.
+				d.AwaitingFirstReceive = true
+			default:
 				return r, fmt.Errorf("route %s denom %s: %w", rj.Route, dj.Denom, err)
 			}
-			d.Token, d.Trace = token, trace
 			zero := model.AmountFromInt64(0)
 			d.Lock = &zero
 		}
@@ -222,6 +229,15 @@ func (v *Views) denomTrace(ctx context.Context, denom string, routeClients []str
 		}
 	}
 	return "", "", fmt.Errorf("denom trace path %q names a client outside the route", dt.Path)
+}
+
+// noVoucher reports whether the realm answers that a minted denom has no
+// voucher token; any other answer, including an error, counts as a voucher,
+// so a voucher whose trace is missing still fails the read.
+func (v *Views) noVoucher(ctx context.Context, denom string, p Pin) bool {
+	var raw json.RawMessage
+	err := v.renderJSON(ctx, v.paths.Transfer, "voucher/"+denom, p, &raw)
+	return isNotFound(err)
 }
 
 func isHexAddress(s string) bool {

@@ -67,12 +67,15 @@ type Denom struct {
 	Token string `json:"token"`
 	// Trace is the minted denom's trace path (transfer/<client>), checked to
 	// name a client of the route; empty for unescrow.
-	Trace         string `json:"trace,omitempty"`
-	Meter         Meter  `json:"meter"`
-	RefundMeter   Meter  `json:"refund_meter"`
-	Waiting       int64  `json:"waiting"`
-	QueuedRefunds int64  `json:"queued_refunds"`
-	Totals        Totals `json:"totals"`
+	Trace string `json:"trace,omitempty"`
+	// AwaitingFirstReceive marks a minted denom configured on the route
+	// that has never been received: no trace, no voucher, so no Token yet.
+	AwaitingFirstReceive bool   `json:"awaiting_first_receive,omitempty"`
+	Meter                Meter  `json:"meter"`
+	RefundMeter          Meter  `json:"refund_meter"`
+	Waiting              int64  `json:"waiting"`
+	QueuedRefunds        int64  `json:"queued_refunds"`
+	Totals               Totals `json:"totals"`
 	// Lock is the realm's escrow accounting of the denom for this route
 	// (total_escrow), exact; 0 for mint.
 	Lock *Amount `json:"lock,omitempty"`

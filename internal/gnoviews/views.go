@@ -9,6 +9,7 @@ package gnoviews
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -163,7 +164,7 @@ func (v *Views) renderJSON(ctx context.Context, pkg, path string, p Pin, out any
 			Error string `json:"error"`
 		}
 		if json.Unmarshal([]byte(raw), &e) == nil && e.Error != "" {
-			return fmt.Errorf("%s:%s: %s", shortPkg(pkg), path, e.Error)
+			return &realmError{at: shortPkg(pkg) + ":" + path, msg: e.Error}
 		}
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -172,6 +173,18 @@ func (v *Views) renderJSON(ctx context.Context, pkg, path string, p Pin, out any
 		return fmt.Errorf("%s:%s: decode: %w", shortPkg(pkg), path, err)
 	}
 	return nil
+}
+
+// realmError is a Render answer of the form {"error": msg}.
+type realmError struct{ at, msg string }
+
+func (e *realmError) Error() string { return e.at + ": " + e.msg }
+
+// isNotFound reports whether err is a realm answering that what was asked
+// for does not exist.
+func isNotFound(err error) bool {
+	var re *realmError
+	return errors.As(err, &re) && strings.HasSuffix(re.msg, " not found")
 }
 
 func shortPkg(pkg string) string {

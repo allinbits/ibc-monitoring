@@ -177,6 +177,41 @@ func TestDenomTraceRefusals(t *testing.T) {
 	}
 }
 
+func TestDenomAwaitingFirstReceive(t *testing.T) {
+	v, pin, srv := devnet(t)
+	const trace = "vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF"
+	const voucher = "vm/qrender|gno.land/r/aib/ibc/apps/transfer:voucher/ibc/ABCDEF"
+	srv.Set(trace, `{"error":"denom ibc/ABCDEF not found"}`)
+
+	// Configured, never received: no trace and no voucher is a state, not a
+	// failed read.
+	srv.Set(voucher, `{"error":"voucher token ibc/ABCDEF not found"}`)
+	routes, err := v.Routes(context.Background(), pin)
+	if err != nil {
+		t.Fatalf("a denom awaiting its first receive must not fail the read: %v", err)
+	}
+	var found bool
+	for _, r := range routes {
+		for _, d := range r.Denoms {
+			if d.Denom == "ibc/ABCDEF" {
+				found = true
+				if !d.AwaitingFirstReceive || d.Token != "" || d.Trace != "" {
+					t.Fatalf("denom: %+v", d)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the denom awaiting its first receive is missing from the route")
+	}
+
+	// A voucher without its trace is an inconsistency, still refused.
+	srv.Set(voucher, `{"denom":"ibc/ABCDEF","decimals":18,"total_supply":"1"}`)
+	if _, err := v.Routes(context.Background(), pin); err == nil {
+		t.Fatal("expected an error for a voucher whose trace is missing")
+	}
+}
+
 func TestGovernance(t *testing.T) {
 	v, pin, srv := devnet(t)
 	g, err := v.Governance(context.Background(), []string{"ethereum-1"}, pin)
