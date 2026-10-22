@@ -201,8 +201,9 @@ func (v *Views) lock(ctx context.Context, route, denom string, p Pin) (model.Amo
 }
 
 // denomTrace resolves a minted denom (ibc/<hash>) to its Ethereum token: the
-// trace base, which must be a hex address, over a path naming one of the
-// route's clients (transfer/<client>).
+// trace base, which must be a hex address, over a single hop naming one of
+// the route's clients. The realm's path is the full trace, the hop followed
+// by the base (transfer/<client>/<base>); the returned path is the hop.
 func (v *Views) denomTrace(ctx context.Context, denom string, routeClients []string, p Pin) (token, path string, err error) {
 	hash, ok := strings.CutPrefix(denom, "ibc/")
 	if !ok {
@@ -219,13 +220,17 @@ func (v *Views) denomTrace(ctx context.Context, denom string, routeClients []str
 	if !isHexAddress(base) {
 		return "", "", fmt.Errorf("denom trace base %q is not an Ethereum address", dt.Base)
 	}
-	client, ok := strings.CutPrefix(dt.Path, "transfer/")
-	if !ok || strings.Contains(client, "/") {
+	hop, ok := strings.CutSuffix(dt.Path, "/"+dt.Base)
+	if !ok {
+		return "", "", fmt.Errorf("denom trace path %q does not end in its base %q", dt.Path, dt.Base)
+	}
+	client, ok := strings.CutPrefix(hop, "transfer/")
+	if !ok || client == "" || strings.Contains(client, "/") {
 		return "", "", fmt.Errorf("denom trace path %q is not a single transfer hop", dt.Path)
 	}
 	for _, c := range routeClients {
 		if c == client {
-			return base, dt.Path, nil
+			return base, hop, nil
 		}
 	}
 	return "", "", fmt.Errorf("denom trace path %q names a client outside the route", dt.Path)

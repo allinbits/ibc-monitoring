@@ -166,14 +166,23 @@ func TestRoutes(t *testing.T) {
 func TestDenomTraceRefusals(t *testing.T) {
 	v, pin, srv := devnet(t)
 	// A trace over a client outside the route is refused.
-	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"0xdac17f958d2ee523a2206206994597c13d831ec7","path":"transfer/other-9","denom":"ibc/ABCDEF"}`)
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"0xdac17f958d2ee523a2206206994597c13d831ec7","path":"transfer/other-9/0xdac17f958d2ee523a2206206994597c13d831ec7","denom":"ibc/ABCDEF"}`)
 	if _, err := v.Routes(context.Background(), pin); err == nil {
 		t.Fatal("expected an error for a foreign hop")
 	}
 	// A base that is not an address is refused.
-	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"uatom","path":"transfer/ethereum-1","denom":"ibc/ABCDEF"}`)
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"uatom","path":"transfer/ethereum-1/uatom","denom":"ibc/ABCDEF"}`)
 	if _, err := v.Routes(context.Background(), pin); err == nil {
 		t.Fatal("expected an error for a non-address base")
+	}
+	// Two hops, or a path that does not end in its base, are refused.
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"0xdac17f958d2ee523a2206206994597c13d831ec7","path":"transfer/x-1/transfer/ethereum-1/0xdac17f958d2ee523a2206206994597c13d831ec7","denom":"ibc/ABCDEF"}`)
+	if _, err := v.Routes(context.Background(), pin); err == nil {
+		t.Fatal("expected an error for two hops")
+	}
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/apps/transfer:denoms/ibc/ABCDEF", `{"base":"0xdac17f958d2ee523a2206206994597c13d831ec7","path":"transfer/ethereum-1","denom":"ibc/ABCDEF"}`)
+	if _, err := v.Routes(context.Background(), pin); err == nil {
+		t.Fatal("expected an error for a path without its base")
 	}
 }
 
