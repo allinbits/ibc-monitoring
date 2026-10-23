@@ -24,4 +24,12 @@ describe("amount", () => {
     expect(percent("30", "20")).toBe(100);
     expect(percent("1", "0")).toBeNull();
   });
+  it("preserves all 18 voucher decimals, including a single base unit", () => {
+    expect(formatAmount("1000000000000000000000000", 18)).toBe("1,000,000");
+    expect(formatAmount("1", 18)).toBe("0.000000000000000001");
+    expect(formatAmount("1234567890123456789", 18)).toBe("1.234567890123456789");
+    expect(formatAmount((2n ** 256n - 1n).toString(), 18)).toBe(
+      "115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457.584007913129639935",
+    );
+  });
 });

@@ -101,6 +101,10 @@ export interface Denom {
   totals: Totals;
   /** The governed decimals of the voucher (0 for an unescrowed, gno-native denom). */
   decimals: number;
+  display_decimals?: number;
+  day_cap?: string;
+  supply?: string;
+  awaiting_first_receive?: boolean;
   /** The realm's escrow accounting (total_escrow), exact. */
   lock?: string;
 }
@@ -119,7 +123,80 @@ export interface GnoRoute {
   unrecovered: string;
   unresolved: string;
   denoms: Denom[];
+  claims?: Claim[];
+  sweeps?: Sweep[];
+  sends?: Send[];
+  losses?: Loss[];
   provenance: Provenance;
+}
+
+export interface Claim {
+  key: string;
+  denom: string;
+  to: string;
+  amount: string;
+  paid: string;
+  reduced: string;
+  fee: string;
+  state: "open" | "withheld" | "forged" | "done";
+  by: string;
+  at: number;
+  height: number;
+  seq: number;
+}
+
+export interface Sweep {
+  key: string;
+  denom: string;
+  to: string;
+  amount: string;
+  reduced: string;
+  sweep_reason: string;
+  height: number;
+  voided: boolean;
+  paid: boolean;
+  paid_to: string;
+  from_claim?: boolean;
+  claim_paid?: string;
+}
+
+export interface Send {
+  key: string;
+  sequence: Seq;
+  source_client: string;
+  destination_client: string;
+  timeout_timestamp: number;
+  commitment_ok: boolean;
+  sender: string;
+  receiver: string;
+  denom: string;
+  kind: string;
+  amount: string;
+  fee: string;
+  sent_height: number;
+  sent_at: number;
+  outcome: string;
+  processed_height: number;
+  processed_at: number;
+  payment: string;
+  refunded: string;
+  settlement: number;
+  reservation: string;
+  proven: number;
+  proven_at: number;
+  proven_by: string;
+  proven_gen: number;
+  incident: string;
+}
+
+export interface Loss {
+  key: string;
+  direction: string;
+  denom: string;
+  amount: string;
+  chain: string;
+  incident: string;
+  cause: string;
 }
 
 export interface EthFlag {
@@ -145,6 +222,12 @@ export interface EthLimits {
   send_min: string;
   receive_level: string;
   refund_level: string;
+  receive_available?: string;
+  refund_available?: string;
+  origin?: "ethereum" | "gno";
+  decimals?: number;
+  escrow_balance?: string;
+  voucher_supply?: string;
   reserved: string;
   losses: string;
   accepted_deficit: string;

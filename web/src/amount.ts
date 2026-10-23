@@ -31,9 +31,3 @@ export function percent(part: string | bigint, total: string | bigint): number |
   // A percentage is a display ratio, never an amount: it fits a small integer.
   return pct < 0n ? 0 : pct > 100n ? 100 : parseInt(pct.toString(), 10);
 }
-
-/** Known decimals per denom; unknown denoms show base units. */
-export function decimalsOf(denom: string): number {
-  if (denom === "ugnot" || denom.startsWith("transfer/")) return 6;
-  return 0;
-}

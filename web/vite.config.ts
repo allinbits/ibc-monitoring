@@ -6,7 +6,12 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: { "/api": process.env.IBCMON_API ?? "http://127.0.0.1:8080" },
+    proxy: {
+      "/api": {
+        target: process.env.IBCMON_API ?? "http://127.0.0.1:8080",
+        changeOrigin: true,
+      },
+    },
   },
   build: { outDir: "dist", sourcemap: false },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
