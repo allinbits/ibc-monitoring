@@ -1,0 +1,3299 @@
+{
+  "meta": {
+    "generated": "2026-10-23",
+    "chain_id": "test-ibc-1",
+    "clocks_testnet": {
+      "factor": 168,
+      "delay_s": 3600,
+      "proposal_deadline_s": 7200,
+      "hold_linger_s": 514,
+      "hold_replacement_wait_s": 10800,
+      "ethereum_ibcadmin_testnet": {
+        "DAY_s": 514,
+        "WEEK_s": 3598,
+        "HOLD_REPLACEMENT_s": 10794,
+        "MIN_RECOVERY_DELAY_s": 3600
+      }
+    },
+    "live_state": {
+      "governor": "g1kg6w7a4f0kup8wj9y33jdkqvvux7n559avyzcs",
+      "yielded": 0,
+      "epoch": 1,
+      "epoch_client": "ethereum-1",
+      "router_client": "client-0",
+      "last_seq": 3,
+      "last_decision": 10,
+      "route": "ethereum-1",
+      "seats": {
+        "0": "g1n3j4l5fxlslex34knj0swpqgsw4jna4w66l88t",
+        "1": "g1jqqfy6fq3z85xduazzqecnfrg6kwy6yjaakan6",
+        "2": "g1dqnvmvlp5nq4uy7why0qw8lyq2xe0h0ulal8yy",
+        "3": "g1dynw7thjvgpj7y2efvy7x3e35f2p96ftzgx6aw",
+        "4": "g1llaf5vpg5tcjdj7l4z7eq9jplemu5jtqp249n3",
+        "5": "g1s2fm43qel0stvuyeyjdzjq6muu9x4fgmuxs3xx"
+      },
+      "relayers": ["g1hc9ad9quga48r8tvadwj7nsaf7m866h0k3rzth"],
+      "core_impl": "core/impl/v0 (v1 registered)",
+      "transfer_impl": "transfer/impl/v1",
+      "denoms": {
+        "ugnot": "unescrow, remote 0x3c15f5ca79d6051fc582d8e7efb0b39da3cb3212",
+        "ibc/F7F044B527F1D7A9301210CB2F71A567B4FEA33C96B2CA56CB7D443AA3984D0C": "mint, token 0xbb30a5eec397174d5da58c4d180459da51114988, 18 decimals"
+      },
+      "ethereum": {
+        "router": "0x6a1E8C6F167006dE6d95fE05e930765d0EA9f49d",
+        "ics20": "0xe44499e840797B6b452f074100BC66030dBf69F5",
+        "ibc_admin": "0x3D8B06752b98A3D5ee5368870174B278Cc7a1442",
+        "ugnot_voucher": "0x3c15f5CA79D6051FC582D8e7eFB0b39da3cb3212",
+        "test_token": "0xBb30A5eEC397174d5DA58C4D180459DA51114988"
+      },
+      "govdao_members": [
+        "g16pcnylx43k0rp272jnhzyp490acmns24qrgua6",
+        "g1q392jxrvawgfe3q5tu585ap5j99frzkhcqzsu0",
+        "g1vk6zdqj9kg2lhth8rqdf3des2ucpp76m4lzq9q"
+      ],
+      "addresses": {
+        "ibcgov_realm": "g12l3du5z70zzq9rkc82asre09srefve7p5mfay4",
+        "govdao_proxy": "g1p84dvfh4wrplyxx4zsmy77a8rxcnjup2j7zv5r",
+        "transfer_realm": "g1tp3gk4quumurav4858hjfdy6hxtyffwmnxyr00"
+      }
+    },
+    "counts": {
+      "actions": 78,
+      "per_role": {
+        "governor": 59,
+        "anyone": 11,
+        "govdao": 63,
+        "guardian": 2,
+        "watch": 2
+      },
+      "simulation_cases": 130
+    }
+  },
+  "actions": [
+    {
+      "id": "yield",
+      "category": "lifecycle",
+      "title": "Yield to GovDAO",
+      "description": "The governor's one-way hand-over (ADR pr6375 \u00a77.7): from this block only GovDAO proposals decide and Govern is closed for good. Queued decisions still apply by Execute.",
+      "roles": ["governor"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "Yield",
+        "args": [],
+        "send": ""
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Irreversible. After it, every action marked governor needs a GovDAO proposal with 2 of the 3 T1 members voting YES.",
+        "Before yielding, check that GovDAO can actually reach supermajority (memberstore: 3 T1 members, 2 YES votes needed)."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 2
+      }
+    },
+    {
+      "id": "govern",
+      "category": "lifecycle",
+      "title": "Govern (governor's direct decision)",
+      "description": "Before the yield the governor makes any builder's decision directly, in its own m_run, through the same closure GovDAO runs after the yield (same checks, at-once test, 7-day queue and record). Refused for every other caller, and for everyone after the yield.",
+      "roles": ["governor"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), {{EXPR}})\n}\n"
+      },
+      "params": [
+        {
+          "name": "EXPR",
+          "type": "string",
+          "validation": "an ibcgov builder call from this catalog.",
+          "help": "The request."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Records the decision in the same tx: applied, queued (due = now + delay) or spent."
+      },
+      "pitfalls": [
+        "Must be an m_run signed by the governor key: Request has unexported fields and a closure, so no m_call can carry it.",
+        "Builder refusals panic and revert the whole tx (nothing recorded); refusals at apply time are recorded as spent."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 2
+      }
+    },
+    {
+      "id": "execute",
+      "category": "lifecycle",
+      "title": "Execute a due decision",
+      "description": "Applies queued gno-side decision id once its delay has passed. Anyone may call it; a guardian hold defers it (except a seat change from day 21 of the hold), and a flag on the paying function defers sweeps and refund settlements.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "Execute",
+        "args": ["{{id}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "int",
+          "validation": "an existing pending decision whose due time has passed (Decision(id).Due <= now).",
+          "help": "Decision number from the ledger (Decision event attr id, or render ibcgov:decisions)."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Call when now >= due. A decision is re-checked against live state when it applies: a refusal SPENDS it (state spent, note says why); it is never retried."
+      },
+      "pitfalls": [
+        "Errors: 'decision N is due at T, not before'; 'is deferred: a guardian hold stands since T'; 'is <state>, not pending'.",
+        "A spent decision is final; build a new request if the state changes."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 3
+      }
+    },
+    {
+      "id": "cancel",
+      "category": "lifecycle",
+      "title": "Cancel a pending gno-side decision",
+      "description": "Withdraws a pending (queued) gno-side decision at once (ADR pr6375 \u00a77.5: cancels are immediate). Guardians cannot cancel; only a decision can. A cancelled recovery expectation releases its intent.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCancelRequest(cross(cur), {{id}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCancelRequest(cross(cur), {{id}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "int",
+          "validation": "a decision that is pending now (and when the cancel is recorded).",
+          "help": "Number of the decision to withdraw."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Only gno-side pending decisions. An Ethereum-bound decision is dispatched at once; cancel it on Ethereum with eth.cancel (kind 1)."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.update_impl",
+      "category": "core",
+      "title": "Activate a core implementation",
+      "description": "Activates a registered implementation of gno.land/r/aib/ibc/core after 7 days (ADR pr6375 \u00a76.12).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreUpdateImplRequest(cross(cur), \"{{path}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreUpdateImplRequest(cross(cur), \"{{path}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "validation": "gno.land/r/aib/ibc/core/impl/v<N>, registered (core.RegisteredImplPaths()).",
+          "help": "Implementation path.",
+          "default": "gno.land/r/aib/ibc/core/impl/v1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "core.CheckUpdateImpl is re-run when it applies; a failing check spends the decision."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.add_relayer",
+      "category": "core",
+      "title": "Add a core relayer",
+      "description": "Adds an address to the core's relayer whitelist after 7 days. Only matters for non-Ethereum clients: relaying for an Ethereum client is permissionless.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreAddRelayerRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreAddRelayerRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "Relayer address."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "core.remove_relayer",
+      "category": "core",
+      "title": "Remove a core relayer",
+      "description": "Removes a relayer from the whitelist: at once while others remain, after 7 days when it is the last one (an empty whitelist lets anyone relay).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreRemoveRelayerRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreRemoveRelayerRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "A listed relayer (core.Relayers()).",
+          "default": "g1hc9ad9quga48r8tvadwj7nsaf7m866h0k3rzth"
+        }
+      ],
+      "timing": {
+        "gno": "conditional",
+        "execute_needed": true,
+        "notes": "Immediate if other relayers remain; queued (1 h testnet / 7 d mainnet) when it is the last one. Live: only one relayer, so queued."
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.recover_client",
+      "category": "core",
+      "title": "Recover a core client from a substitute",
+      "description": "Recovers a frozen or expired core client from a substitute client after 7 days (core recover-client.md).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRecoverClientRequest(cross(cur), \"{{subjectClientID}}\", \"{{substituteClientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRecoverClientRequest(cross(cur), \"{{subjectClientID}}\", \"{{substituteClientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "subjectClientID",
+          "type": "gno client id",
+          "validation": "a known core client (core.ClientType != \"\").",
+          "help": "Frozen/expired client to recover.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "substituteClientID",
+          "type": "gno client id",
+          "validation": "a known core client; the core's and light client's recovery checks run when it applies.",
+          "help": "Healthy substitute client."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "The builder only checks both ids exist; core.CheckRecoverClient runs at Execute and a failure spends the decision (e.g. subject == substitute, subject still Active)."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.approve_app",
+      "category": "core",
+      "title": "Approve a pending app registration",
+      "description": "Activates a pending IBC app registration on a port after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreApproveAppRequest(cross(cur), \"{{portID}}\", \"{{pkgPath}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreApproveAppRequest(cross(cur), \"{{portID}}\", \"{{pkgPath}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "portID",
+          "type": "string",
+          "validation": "a port with a pending registration (render gno.land/r/aib/ibc/core:apps/pending).",
+          "help": "Port id."
+        },
+        {
+          "name": "pkgPath",
+          "type": "string",
+          "validation": "the pending realm path for that port.",
+          "help": "App realm path."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.reject_app",
+      "category": "core",
+      "title": "Reject a pending app registration",
+      "description": "Drops a pending app registration at once.",
+      "roles": ["governor", "govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreRejectAppRequest(cross(cur), \"{{portID}}\", \"{{pkgPath}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreRejectAppRequest(cross(cur), \"{{portID}}\", \"{{pkgPath}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "portID",
+          "type": "string",
+          "validation": "a port with a pending registration.",
+          "help": "Port id."
+        },
+        {
+          "name": "pkgPath",
+          "type": "string",
+          "validation": "the pending realm path.",
+          "help": "App realm path."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "GovDAO can also do this directly, without the ibcgov ledger: govdao.core_reject_app_direct."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.pause",
+      "category": "core",
+      "title": "Pause the core packet path",
+      "description": "Suspends the core's packet path (SendPacket, RecvPacket, acks, timeouts) at once. Reserved for a core bug: it blocks refunds too (ADR pr6375 \u00a77.3).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCorePauseRequest(cross(cur)))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCorePauseRequest(cross(cur)).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "A paused core also refuses governance packets: every Ethereum-bound decision recorded while paused is spent ('the core is paused')."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "core.unpause",
+      "category": "core",
+      "title": "Unpause the core packet path",
+      "description": "Resumes the core packet path at once; spent under a guardian hold.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreUnpauseRequest(cross(cur)))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreUnpauseRequest(cross(cur)).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "If the core is not paused the decision is recorded and SPENT (the tx still succeeds); check core.Paused() first.",
+        "Under a guardian hold (ibcgov.Held()) it is spent."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 2,
+        "refused": 0
+      }
+    },
+    {
+      "id": "core.pause_app",
+      "category": "core",
+      "title": "Pause an IBC app",
+      "description": "Suspends the app on a port at once: its sends are refused and incoming packets get error acks.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCorePauseAppRequest(cross(cur), \"{{portID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCorePauseAppRequest(cross(cur), \"{{portID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "portID",
+          "type": "string",
+          "validation": "a registered port (core.AppPkgPath(port) != \"\"): live ports transfer, gov.",
+          "help": "Port.",
+          "default": "transfer"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": ["Pausing port gov stops every Ethereum-bound decision (they are spent)."],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.unpause_app",
+      "category": "core",
+      "title": "Unpause an IBC app",
+      "description": "Resumes the app on a port at once; spent under a guardian hold, or when it is not paused.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreUnpauseAppRequest(cross(cur), \"{{portID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreUnpauseAppRequest(cross(cur), \"{{portID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "portID",
+          "type": "string",
+          "validation": "a registered port.",
+          "help": "Port.",
+          "default": "transfer"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": ["Spent (tx succeeds) if the app is not paused (core.IsAppPaused)."],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "core.add_member",
+      "category": "core",
+      "title": "Add a core authority member",
+      "description": "Adds a member to the core authority (the tightening operations: pause, pause app, reject app) after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreAddMemberRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreAddMemberRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "New member."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "core.remove_member",
+      "category": "core",
+      "title": "Remove a core authority member",
+      "description": "Removes a core authority member at once. The ibcgov realm itself cannot be removed.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreRemoveMemberRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCoreRemoveMemberRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "A current member (core.AuthorityMembers(); live: ibcgov g12l3du5z70zzq9rkc82asre09srefve7p5mfay4 and the GovDAO proxy g1p84dvfh4wrplyxx4zsmy77a8rxcnjup2j7zv5r)."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Removing the GovDAO proxy removes GovDAO's direct pause path (govdao.core_pause_direct)."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.migrate_client_fork_schedule",
+      "category": "core",
+      "title": "Migrate a client's fork schedule",
+      "description": "Migrates the Ethereum fork schedule of a live core client after 7 days (ADR pr6375 R16, \u00a76.12); must land before the fork epoch.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewMigrateClientRequest(cross(cur), \"{{clientID}}\", \"ethereum-fork-schedule\", \"{{paramsHex}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewMigrateClientRequest(cross(cur), \"{{clientID}}\", \"ethereum-fork-schedule\", \"{{paramsHex}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "an Ethereum core client.",
+          "help": "Client to migrate.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "paramsHex",
+          "type": "hex",
+          "validation": "hex of ethereum.EncodeForkParameters; must decode (DecodeForkParameters refuses trailing bytes); the light client's CheckForkParameters runs at Execute.",
+          "help": "Encoded fork schedule. The decision text spells it out fork by fork."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "core.replace_verifier",
+      "category": "core",
+      "title": "Convert a client's verifier version",
+      "description": "Converts the verifier of a live Ethereum client to another verifier version after 7 days, with the conversion the active core implementation compiles in; the client keeps its id and state, its trust generation advances and its route's meters empty.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewReplaceVerifierRequest(cross(cur), \"{{clientID}}\", \"{{toVersion}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewReplaceVerifierRequest(cross(cur), \"{{clientID}}\", \"{{toVersion}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "an Ethereum core client (live verifier: core.VerifierVersion(\"ethereum-1\") = ethereum/v0).",
+          "help": "Client.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "toVersion",
+          "type": "string",
+          "validation": "non-empty verifier version the active core impl can convert to.",
+          "help": "Target verifier version, e.g. ethereum/v1."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Spent at Execute if the active core implementation declares no such conversion or the client is Frozen; install the core implementation first (core.update_impl)."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.update_impl",
+      "category": "transfer",
+      "title": "Activate a transfer implementation",
+      "description": "Activates a registered transfer implementation after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewTransferUpdateImplRequest(cross(cur), \"{{path}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewTransferUpdateImplRequest(cross(cur), \"{{path}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "validation": "gno.land/r/aib/ibc/apps/transfer/impl/v<N>, registered (transfer.RegisteredImplPaths(); live only impl/v1, which is active).",
+          "help": "Implementation path."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "transfer.CheckUpdateImpl runs at Execute (controls continuity, version acceptance); refusal spends it."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.block",
+      "category": "transfer",
+      "title": "Block an address in the transfer app",
+      "description": "Blocks an address at once: it can no longer send, and packets to it are refused (refunds already owed still go through).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewTransferBlockRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewTransferBlockRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "Address to block."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": ["GovDAO can also block directly (govdao.transfer_block_direct)."],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.unblock",
+      "category": "transfer",
+      "title": "Unblock an address",
+      "description": "Removes an address from the transfer blocklist after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewTransferUnblockRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewTransferUnblockRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "A blocked address (transfer.IsBlocked)."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "transfer.add_member",
+      "category": "transfer",
+      "title": "Add a transfer authority member",
+      "description": "Adds a member to the transfer app's authority after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewTransferAddMemberRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewTransferAddMemberRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "New member."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.remove_member",
+      "category": "transfer",
+      "title": "Remove a transfer authority member",
+      "description": "Removes a member of the transfer authority at once; the ibcgov realm stays.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewTransferRemoveMemberRequest(cross(cur), \"{{addr}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewTransferRemoveMemberRequest(cross(cur), \"{{addr}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "addr",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "A current member (transfer.AuthorityMembers())."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "seats.set",
+      "category": "guardians",
+      "title": "Set gno guardian / watch-key seats",
+      "description": "Changes seats 0-3 (guardians) and 4-5 (watch keys) of ibcgov on gno.land. Every change, a vacancy included, waits 7 days and lands through a guardian hold no sooner than day 21 of it.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewSetSeatsRequest(cross(cur), \"{{changes}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewSetSeatsRequest(cross(cur), \"{{changes}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "changes",
+          "type": "string",
+          "validation": "comma-separated seat:address, 1 to 6 items; seat 0-5, each once; empty address vacates; at most two guardian seats (0-3) per decision; no address in two seats; an address may not be set into the seat it already holds.",
+          "help": "e.g. 2:g1...,5:g1... ; '3:' vacates seat 3."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800,
+        "notes": "Through a hold: lands from day 21 of the hold that first deferred it (3 h on testnet). The first deferred Execute succeeds and only records the anchor."
+      },
+      "pitfalls": [
+        "These are the gno.land seats. Ethereum's IBCAdmin seats are eth.seats (kind 3), separate keys.",
+        "A vacancy only removes the exact tenure it was requested against; if the seat changed hands since, it is skipped."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 2
+      }
+    },
+    {
+      "id": "flag.set",
+      "category": "guardians",
+      "title": "Set a flag (pause a route function)",
+      "description": "A seat flags one function of a route (sends, credits, payouts, refunds), pausing it at once. Two guardian seats flagging make a hold: every queued decision is deferred and every unpause is spent. A guardian's payouts flag may name suspect packets, which makes their void immediate.",
+      "roles": ["guardian", "watch"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "SetFlag",
+        "args": ["{{route}}", "{{fn}}", "{{keys}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "an enrolled route or any Ethereum core client (gno id, e.g. ethereum-1); router ids like client-0 are refused.",
+          "help": "Route.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "fn",
+          "type": "string",
+          "validation": "one of sends, credits, payouts, refunds.",
+          "help": "Function to pause."
+        },
+        {
+          "name": "keys",
+          "type": "string",
+          "validation": "\"\" or comma-separated packet keys (max 64); only for fn=payouts AND a guardian seat (0-3).",
+          "help": "Suspect packets (guardian payouts flag only).",
+          "default": ""
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Caller must be the seat's key itself (cur.Previous() address) - a direct m_call from the seat address, or an m_run by it.",
+        "Re-asserting replaces the packet list.",
+        "Flags never stop voucher returns (burns), acks or timeouts.",
+        "The Ethereum guardian flag is IBCAdmin.setFlag() on Ethereum, outside Adena."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 3,
+        "refused": 5
+      }
+    },
+    {
+      "id": "flag.clear",
+      "category": "guardians",
+      "title": "Clear own flag",
+      "description": "A seat clears its own flag on a function of a route. Clearing a payouts flag starts the route's meters empty (new payouts epoch). A hold ends 24 h (514 s testnet) after fewer than two guardian seats flag.",
+      "roles": ["guardian", "watch"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "ClearFlag",
+        "args": ["{{route}}", "{{fn}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "the route the flag stands on.",
+          "help": "Route.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "fn",
+          "type": "string",
+          "validation": "sends|credits|payouts|refunds; must be a live flag of the caller's seat (Flags(route) lines 'fn seat N at T').",
+          "help": "Function."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Only your own seat's flag; to clear every seat's flags use route.unpause (a decision).",
+        "A route with unrestored losses stays closed whatever the flags."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "flag.prune",
+      "category": "guardians",
+      "title": "Prune stale flags",
+      "description": "Removes up to n flag entries of seats whose key left (storage reclaim only). Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "PruneFlags",
+        "args": ["{{n}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "n",
+          "type": "int",
+          "validation": "1 to 64.",
+          "help": "Entries to visit.",
+          "default": "64"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "route.unpause",
+      "category": "guardians",
+      "title": "Unpause route functions (clear every seat's flags)",
+      "description": "Clears every seat's flags of the named functions on a route, at once (on gno.land GovDAO unpauses immediately). Spent under a guardian hold.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewUnpauseRouteRequest(cross(cur), \"{{route}}\", \"{{fns}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewUnpauseRouteRequest(cross(cur), \"{{route}}\", \"{{fns}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "fns",
+          "type": "string",
+          "validation": "comma-separated subset of sends,credits,payouts,refunds; non-empty.",
+          "help": "Functions to unpause."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Spent if no flag stood ('no flag stood') or a hold stands; the tx still succeeds."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "route.enroll",
+      "category": "routes",
+      "title": "Enrol the Ethereum route",
+      "description": "Makes an Ethereum client a controlled route of the transfer app after 7 days, with its fee collector and protected bridge contracts; records the route identity. One route only, ever.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEnrollRouteRequest(cross(cur), \"{{clientID}}\", \"{{feeCollector}}\", \"{{bridge}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEnrollRouteRequest(cross(cur), \"{{clientID}}\", \"{{feeCollector}}\", \"{{bridge}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "Active Ethereum core client with counterparty registered, not retired, no route's client; and no route enrolled yet.",
+          "help": "Gno client."
+        },
+        {
+          "name": "feeCollector",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "Fee collector; not a bridge realm."
+        },
+        {
+          "name": "bridge",
+          "type": "string",
+          "validation": "\"<router> <ics20> <ibcAdmin>\": three distinct non-zero Ethereum addresses, SPACE separated; router must be the router the client reads.",
+          "help": "Bridge contracts."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Already done on the testnet (decision #1). A second enrolment is refused: one governance channel serves one route."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "bind_governance",
+      "category": "routes",
+      "title": "Bind the governance channel",
+      "description": "Opens governance epoch 1 over the enrolled route's original client after 7 days. Once only.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewBindGovernanceRequest(cross(cur), \"{{clientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewBindGovernanceRequest(cross(cur), \"{{clientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "the enrolled route's original, Active client; channel not bound yet.",
+          "help": "Gno client."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": ["Done on the testnet (decision #5; epoch 1 over ethereum-1)."],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "denom.set",
+      "category": "routes",
+      "title": "Set denom / limits / fees on the route",
+      "description": "Enables a denom on the route or changes its caps, fees, send limits, refund cap, Ethereum token and voucher decimals. A pure tightening applies at once; a new denom or any loosening waits 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewSetDenomRequest(cross(cur), \"{{route}}\", \"{{denom}}\", \"{{kind}}\", {{capFloor}}, {{supplyCap}}, {{fee}}, {{feeFloor}}, {{sendMax}}, {{sendMin}}, {{refundCap}}, \"{{remoteToken}}\", {{decimals}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewSetDenomRequest(cross(cur), \"{{route}}\", \"{{denom}}\", \"{{kind}}\", {{capFloor}}, {{supplyCap}}, {{fee}}, {{feeFloor}}, {{sendMax}}, {{sendMin}}, {{refundCap}}, \"{{remoteToken}}\", {{decimals}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "unescrow: ugnot or a GRC20 alias (not ibc/); mint: the voucher's ibc/<hash>, or the token's 0x address (converted to ibc/sha256(transfer/<route>/<lower addr>)).",
+          "help": "Denom.",
+          "default": "ugnot"
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "validation": "\"unescrow\" (gno-native) or \"mint\" (Ethereum token); never changes for an existing denom.",
+          "help": "Accounting kind.",
+          "default": "unescrow"
+        },
+        {
+          "name": "capFloor",
+          "type": "uint256 decimal",
+          "validation": "> 0; >= 4*fee; and never below the denom's launch_cap_floor (checked at apply: violating it SPENDS the decision).",
+          "help": "Day cap floor (unescrow) / day cap (mint).",
+          "default": "100000000000 (ugnot live)"
+        },
+        {
+          "name": "supplyCap",
+          "type": "uint256 decimal",
+          "validation": "mint: > 0; unescrow: 0.",
+          "help": "Voucher supply cap.",
+          "default": "0 (ugnot)"
+        },
+        {
+          "name": "fee",
+          "type": "uint256 decimal",
+          "validation": ">= feeFloor, <= capFloor/4.",
+          "help": "Fee per send / claim.",
+          "default": "1000000 (ugnot)"
+        },
+        {
+          "name": "feeFloor",
+          "type": "uint256 decimal",
+          "validation": "> 0; changing it in either direction is a loosening (7 days).",
+          "help": "Fee floor.",
+          "default": "100000 (ugnot)"
+        },
+        {
+          "name": "sendMax",
+          "type": "uint256 decimal",
+          "validation": "unescrow: >= sendMin; mint: 0.",
+          "help": "Max per send.",
+          "default": "25000000000 (ugnot)"
+        },
+        {
+          "name": "sendMin",
+          "type": "uint256 decimal",
+          "validation": "unescrow: > 0; mint: 0.",
+          "help": "Min per send.",
+          "default": "2000000 (ugnot)"
+        },
+        {
+          "name": "refundCap",
+          "type": "uint256 decimal",
+          "validation": "> 0.",
+          "help": "Refund meter day cap.",
+          "default": "100000000000 (ugnot)"
+        },
+        {
+          "name": "remoteToken",
+          "type": "hex",
+          "validation": "unescrow: the token's GnoVoucher on Ethereum, non-zero 0x address (lower-cased); mint: \"\".",
+          "help": "Ethereum token for unescrow.",
+          "default": "0x3c15f5ca79d6051fc582d8e7efb0b39da3cb3212 (ugnot)"
+        },
+        {
+          "name": "decimals",
+          "type": "int",
+          "validation": "mint: 0..18 and equal to the existing voucher's decimals once it exists; unescrow: 0.",
+          "help": "Voucher decimals.",
+          "default": "18 (test token) / 0 (ugnot)"
+        }
+      ],
+      "timing": {
+        "gno": "conditional",
+        "execute_needed": true,
+        "notes": "Decided when recorded: controls.Loosens(old,new) -> queued; else at once. Loosening = higher capFloor/supplyCap/fee/sendMax/refundCap, lower sendMin, any change of feeFloor, remoteToken or decimals, or a new denom."
+      },
+      "pitfalls": [
+        "Live mint denom ibc/F7F044B527F1D7A9301210CB2F71A567B4FEA33C96B2CA56CB7D443AA3984D0C (token 0xbb30a5eec397174d5da58c4d180459da51114988, decimals 18).",
+        "Lowering capFloor below launch_cap_floor (render transfer:routes/ethereum-1) passes the builder but is spent: 'the cap floor ... cannot go below its launch value'.",
+        "A tightening with unchanged values is recorded as applied with no effect.",
+        "Ethereum-side limits of the same token are separate: eth.limits (kind 4)."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 4,
+        "refused": 2
+      }
+    },
+    {
+      "id": "fee_collector.set",
+      "category": "routes",
+      "title": "Set the route's fee collector",
+      "description": "Replaces a route's fee collector after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewSetFeeCollectorRequest(cross(cur), \"{{route}}\", \"{{feeCollector}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewSetFeeCollectorRequest(cross(cur), \"{{route}}\", \"{{feeCollector}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "feeCollector",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "New fee collector; not a realm of the bridge (core, transfer, ibcgov, ethrelay, any registered impl)."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "recipients.refuse",
+      "category": "routes",
+      "title": "Refuse send recipients",
+      "description": "Adds Ethereum addresses to the route's refused send recipients, at once.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRefuseRecipientsRequest(cross(cur), \"{{route}}\", \"{{addrs}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRefuseRecipientsRequest(cross(cur), \"{{route}}\", \"{{addrs}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "addrs",
+          "type": "hex",
+          "validation": "comma-separated Ethereum addresses, 1 to 64.",
+          "help": "Recipients to refuse."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "recipients.unrefuse",
+      "category": "routes",
+      "title": "Stop refusing send recipients",
+      "description": "Removes refused send recipients after 7 days. The protected bridge contracts and voucher tokens stay refused whatever it names.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewUnrefuseRecipientsRequest(cross(cur), \"{{route}}\", \"{{addrs}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewUnrefuseRecipientsRequest(cross(cur), \"{{route}}\", \"{{addrs}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "addrs",
+          "type": "hex",
+          "validation": "comma-separated Ethereum addresses, 1 to 64.",
+          "help": "Recipients."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "void",
+      "category": "incident",
+      "title": "Void claims / sweep entries",
+      "description": "Voids claims or sweep entries by packet key: forged drops remainders and books paid amounts as lost; withheld keeps them restorable. At once when a guardian's standing payouts flag names every packet, else after 7 days. Never refunds the source.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewVoidRequest(cross(cur), \"{{route}}\", \"{{keys}}\", {{forged}}, \"{{incident}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewVoidRequest(cross(cur), \"{{route}}\", \"{{keys}}\", {{forged}}, \"{{incident}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "keys",
+          "type": "string",
+          "validation": "comma-separated packet keys \"<gnoClientId>/<sequence zero-padded to 20 digits>\" (controls.PacketKey), 1 to 64.",
+          "help": "Packet keys, e.g. ethereum-1/00000000000000000007."
+        },
+        {
+          "name": "forged",
+          "type": "bool",
+          "validation": "true or false (Gno literal).",
+          "help": "true = forged (final), false = withheld (restorable)."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        }
+      ],
+      "timing": {
+        "gno": "conditional",
+        "execute_needed": true,
+        "notes": "Immediate if NamedSuspect(route,key) for every key when recorded (guardian payouts flag naming them); otherwise queued."
+      },
+      "pitfalls": ["Every key must be voidable that way now (Voidable); none exist live."],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "restore",
+      "category": "incident",
+      "title": "Restore withheld claims",
+      "description": "Restores withheld claims after 7 days (a restoration loosens; a hold defers it). Forged voids and voided sweep entries are final.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRestoreRequest(cross(cur), \"{{route}}\", \"{{keys}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRestoreRequest(cross(cur), \"{{route}}\", \"{{keys}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "keys",
+          "type": "string",
+          "validation": "comma-separated packet keys \"<gnoClientId>/<sequence zero-padded to 20 digits>\" (controls.PacketKey), 1 to 64.",
+          "help": "Packet keys, e.g. ethereum-1/00000000000000000007."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "credit",
+      "category": "incident",
+      "title": "Credit a packet by vote",
+      "description": "Credits a received packet with a success ack by vote, for its whole payable amount, after 7 days; deduplicated against every claim of the packet.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCreditRequest(cross(cur), \"{{route}}\", \"{{key}}\", \"{{denom}}\", \"{{to}}\", {{amount}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewCreditRequest(cross(cur), \"{{route}}\", \"{{key}}\", \"{{denom}}\", \"{{to}}\", {{amount}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "validation": "one packet key \"<gnoClientId>/<20-digit sequence>\".",
+          "help": "Packet key, e.g. ethereum-1/00000000000000000007."
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "to",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "Recipient."
+        },
+        {
+          "name": "amount",
+          "type": "uint256 decimal",
+          "validation": "decimal digits, > 0, below 2^256 (written as a Gno integer literal in the run script).",
+          "help": "Amount in base units."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Only grammar is checked when built; transfer re-checks the packet at Execute and spends the decision on failure."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "sweep",
+      "category": "incident",
+      "title": "Pay sweep entries",
+      "description": "Pays sweep entries of one denom to an address after 7 days; deferred while the route's payouts are flagged.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewSweepRequest(cross(cur), \"{{route}}\", \"{{keys}}\", \"{{to}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewSweepRequest(cross(cur), \"{{route}}\", \"{{keys}}\", \"{{to}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "keys",
+          "type": "string",
+          "validation": "comma-separated packet keys \"<gnoClientId>/<sequence zero-padded to 20 digits>\" (controls.PacketKey), 1 to 64.",
+          "help": "Packet keys, e.g. ethereum-1/00000000000000000007."
+        },
+        {
+          "name": "to",
+          "type": "address",
+          "validation": "bech32 g1... address; canonicalised to lower case (transfer.CanonicalAddress); refused if not an address.",
+          "help": "Payee; never the transfer realm."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Execute panics 'deferred: the payouts of route ... are flagged' while a payouts flag stands."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "loss.record",
+      "category": "incident",
+      "title": "Record a loss",
+      "description": "Records a loss a reconciliation recognised, after 7 days: chain gno or ethereum, cause forged-delivery or collision. One loss per packet.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRecordLossRequest(cross(cur), \"{{route}}\", \"{{key}}\", \"{{denom}}\", {{amount}}, \"{{chain}}\", \"{{incident}}\", \"{{cause}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRecordLossRequest(cross(cur), \"{{route}}\", \"{{key}}\", \"{{denom}}\", {{amount}}, \"{{chain}}\", \"{{incident}}\", \"{{cause}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "validation": "one packet key \"<gnoClientId>/<20-digit sequence>\".",
+          "help": "Packet key, e.g. ethereum-1/00000000000000000007."
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "amount",
+          "type": "uint256 decimal",
+          "validation": "decimal digits, > 0, below 2^256 (written as a Gno integer literal in the run script).",
+          "help": "Amount in base units."
+        },
+        {
+          "name": "chain",
+          "type": "string",
+          "validation": "gno or ethereum.",
+          "help": "Where the loss happened."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        },
+        {
+          "name": "cause",
+          "type": "string",
+          "validation": "forged-delivery or collision.",
+          "help": "Cause."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "recapitalize",
+      "category": "incident",
+      "title": "Authorize a recapitalization",
+      "description": "Authorizes a recapitalization of the route's escrow of a denom after 7 days; anyone then pays it with transfer.Recapitalize.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRecapitalizeRequest(cross(cur), \"{{route}}\", \"{{denom}}\", {{amount}}, \"{{incident}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRecapitalizeRequest(cross(cur), \"{{route}}\", \"{{denom}}\", {{amount}}, \"{{incident}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "amount",
+          "type": "uint256 decimal",
+          "validation": "decimal digits, > 0, below 2^256 (written as a Gno integer literal in the run script).",
+          "help": "Amount; for a coin denom at most 9223372036854775807."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "recap.revoke",
+      "category": "incident",
+      "title": "Revoke a recapitalization authorization",
+      "description": "Revokes an unpaid recapitalization authorization at once.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRevokeRecapRequest(cross(cur), \"{{route}}\", {{id}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRevokeRecapRequest(cross(cur), \"{{route}}\", {{id}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "validation": "an unpaid, unrevoked recapitalization id of the route.",
+          "help": "Authorization id."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "reduce",
+      "category": "incident",
+      "title": "Reduce a liability",
+      "description": "Cuts an open or withheld claim, or an unpaid owed sweep entry, by an amount against an incident after 7 days (refunds are never reduced).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewReduceRequest(cross(cur), \"{{route}}\", \"{{key}}\", {{amount}}, \"{{incident}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewReduceRequest(cross(cur), \"{{route}}\", \"{{key}}\", {{amount}}, \"{{incident}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "validation": "one packet key \"<gnoClientId>/<20-digit sequence>\".",
+          "help": "Packet key, e.g. ethereum-1/00000000000000000007."
+        },
+        {
+          "name": "amount",
+          "type": "uint256 decimal",
+          "validation": "decimal digits, > 0, below 2^256 (written as a Gno integer literal in the run script).",
+          "help": "Amount in base units."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "deficit.accept",
+      "category": "incident",
+      "title": "Accept a deficit",
+      "description": "Records an accepted deficit after 7 days: the route reopens with that amount of its losses unrecovered.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewAcceptDeficitRequest(cross(cur), \"{{route}}\", \"{{denom}}\", {{amount}}, \"{{incident}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewAcceptDeficitRequest(cross(cur), \"{{route}}\", \"{{denom}}\", {{amount}}, \"{{incident}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "amount",
+          "type": "uint256 decimal",
+          "validation": "decimal digits, > 0, below 2^256 (written as a Gno integer literal in the run script).",
+          "help": "Amount in base units."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "settle.gno",
+      "category": "replacement",
+      "title": "Settle retired-client sends (gno side)",
+      "description": "Applies a reconciliation's outcomes to the sends of a client a replacement retired, after 7 days (gno analogue of Ethereum kind 12).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewSettleRequest(cross(cur), \"{{route}}\", \"{{client}}\", \"{{items}}\", \"{{incident}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewSettleRequest(cross(cur), \"{{route}}\", \"{{client}}\", \"{{items}}\", \"{{incident}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "client",
+          "type": "gno client id",
+          "validation": "a gno client a replacement retired from this route (Reader.RetiredRouteOf(client) == route; render transfer:routes 'replaced').",
+          "help": "Retired gno client."
+        },
+        {
+          "name": "items",
+          "type": "string",
+          "validation": "comma-separated seq:action:amount, 1 to 64; seq > 0; action 1 genuine refund (amount = remaining entitlement, 0 if paid in full), 2 reject queued refund (0), 3 delivered (0), 4 forged refund (amount = paid, > 0), 5 forged receive (inbound seq; amount > 0); a sequence once per direction; actions 1-4 must match transfer.ProveOutcome.",
+          "help": "Settlement items."
+        },
+        {
+          "name": "incident",
+          "type": "string",
+          "validation": "1 to 32 characters of a-z, 0-9 and '-' (no free text).",
+          "help": "Incident label recorded with the decision.",
+          "default": "inc-1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Needs a prior route.replace and proven outcomes (transfer.ProveOutcome, run by a relayer tool).",
+        "Deferred while refunds are held (refunds flag) for items paying refunds."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "route.replace",
+      "category": "replacement",
+      "title": "Replace the route's client (gno side)",
+      "description": "Re-points the route to a new Ethereum client after 7 days; the old client is retired (for transfers only while the governance epoch may still pass through it); the route closes until settlements and a reopen.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewReplaceRouteRequest(cross(cur), \"{{route}}\", \"{{newClientID}}\", {{suspectFrom}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewReplaceRouteRequest(cross(cur), \"{{route}}\", \"{{newClientID}}\", {{suspectFrom}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "newClientID",
+          "type": "gno client id",
+          "validation": "Active Ethereum core client, counterparty registered, not retired, no route's client, authenticating the route identity (core.ClientRouteIdentity == ibcgov.RouteIdentity(route)); channel must be bound.",
+          "help": "New gno client."
+        },
+        {
+          "name": "suspectFrom",
+          "type": "int",
+          "validation": "0 <= h <= current gno.land height.",
+          "help": "gno.land height from which acks/timeouts through the old client are suspect (0 = all)."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Pair with the Ethereum side: eth.client.add (kind 6 op 1) for the new router client, then eth.route_replacement (kind 10).",
+        "PrepareReplacement must complete before settlements/credits/sweeps/reopen apply."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "route.reopen",
+      "category": "replacement",
+      "title": "Reopen a closed route (gno side)",
+      "description": "Reopens a route a replacement closed, after 7 days; refused while any retired-client send record is open; unrecovered losses become accepted deficits.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewReopenRouteRequest(cross(cur), \"{{route}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewReopenRouteRequest(cross(cur), \"{{route}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "If it has more work than one batch, anyone continues with transfer.ContinueReopen."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.cancel",
+      "kind": 1,
+      "category": "ethereum",
+      "title": "Cancel Ethereum-bound decisions (kind 1)",
+      "description": "Cancels Ethereum-bound decisions of the current epoch by seq ranges; IBCAdmin applies it at recording whatever its own seq.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthCancelRequest(cross(cur), \"{{ranges}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthCancelRequest(cross(cur), \"{{ranges}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "ranges",
+          "type": "string",
+          "validation": "comma-separated from-to or single n, 1 to 14 ranges, 1 <= from <= to <= LastSeq(Epoch()) (live 3).",
+          "help": "Seq ranges, e.g. 3 or 2-3."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "Applied at recording on Ethereum (no delay).",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent if an epoch switch happens before it is recorded.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.unpause",
+      "kind": 2,
+      "category": "ethereum",
+      "title": "Unpause on Ethereum (kind 2)",
+      "description": "Unpauses on Ethereum after 24 hours there: object 1 the transfer route (named by its router client), object 2 IBCAdmin itself.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthUnpauseRequest(cross(cur), {{object}}, \"{{clientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthUnpauseRequest(cross(cur), {{object}}, \"{{clientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "object",
+          "type": "int",
+          "validation": "1 (transfer route) or 2 (IBCAdmin).",
+          "help": "Object."
+        },
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "object 1: router CURRENT client of the route (client-0); object 2: must be \"\". the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0). Never the gno id (ethereum-1). The deployed realm only checks the router-id grammar (client-N or a custom id), so it ACCEPTS ethereum-1 and the decision is dispatched anyway (see pitfalls); the current branch refuses it. The UI must enforce client-0.",
+          "help": "The router's client id of the route on Ethereum.",
+          "default": "client-0"
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "Applied by IBCAdmin after its unpause delay (24 h; testnet DAY = 514 s).",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Deployed realm accepted object 1 with ethereum-1 (the gno id): it would be dispatched under a route key Ethereum does not use. Enforce client-0 in the UI.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 3,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.seats",
+      "kind": 3,
+      "category": "ethereum",
+      "title": "Set IBCAdmin seats on Ethereum (kind 3)",
+      "description": "Sets IBCAdmin's guardian/watch seats on Ethereum (0-3 guardians, 4-5 watch keys); the zero address vacates.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthSeatsRequest(cross(cur), \"{{changes}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthSeatsRequest(cross(cur), \"{{changes}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "changes",
+          "type": "string",
+          "validation": "comma-separated seat:0xaddress, 1 to 6, seat 0-5 each once, at most two guardian seats (0-3); 0x000...0 vacates.",
+          "help": "Ethereum seat changes. Live Ethereum seat keys: GUARDIAN0..3, WATCH0..1 (0x9f7F..., 0x5374..., 0x765c..., 0xc688..., 0xF668..., 0x023D...)."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.limits",
+      "kind": 4,
+      "category": "ethereum",
+      "title": "Set token limits on Ethereum (kind 4)",
+      "description": "Sets a token's limits on the Ethereum route: per-message max, day cap, refund cap, and for Ethereum-native tokens send max/min. A pure lowering applies at recording, anything else after 7 days.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthLimitsRequest(cross(cur), \"{{clientID}}\", \"{{token}}\", {{maxPerMessage}}, {{dayCap}}, {{refundCap}}, {{sendMax}}, {{sendMin}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthLimitsRequest(cross(cur), \"{{clientID}}\", \"{{token}}\", {{maxPerMessage}}, {{dayCap}}, {{refundCap}}, {{sendMax}}, {{sendMin}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0). Never the gno id (ethereum-1). The deployed realm only checks the router-id grammar (client-N or a custom id), so it ACCEPTS ethereum-1 and the decision is dispatched anyway (see pitfalls); the current branch refuses it. The UI must enforce client-0.",
+          "help": "The router's client id of the route on Ethereum.",
+          "default": "client-0"
+        },
+        {
+          "name": "token",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "ERC20 token on Ethereum (Ethereum-native) or the GnoVoucher (gno-native).",
+          "default": "0xbb30a5eec397174d5da58c4d180459da51114988"
+        },
+        {
+          "name": "maxPerMessage",
+          "type": "uint256 decimal",
+          "validation": "< 2^256.",
+          "help": "Per-message max.",
+          "default": "1000000000000000000000000"
+        },
+        {
+          "name": "dayCap",
+          "type": "uint256 decimal",
+          "validation": "< 2^256.",
+          "help": "Day cap.",
+          "default": "1000000000000000000000000"
+        },
+        {
+          "name": "refundCap",
+          "type": "uint256 decimal",
+          "validation": "< 2^256.",
+          "help": "Refund cap.",
+          "default": "1000000000000000000000000"
+        },
+        {
+          "name": "sendMax",
+          "type": "uint256 decimal",
+          "validation": "0 = unset.",
+          "help": "Send max (Ethereum-native).",
+          "default": "0"
+        },
+        {
+          "name": "sendMin",
+          "type": "uint256 decimal",
+          "validation": "0 = unset.",
+          "help": "Send min.",
+          "default": "0"
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "Pure lowering: at recording on Ethereum; otherwise after IBCAdmin's 7-day delay (testnet 3598 s), then IBCAdmin.execute(seq).",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Live history: decision #9 used ethereum-1 by mistake (dispatched seq 2); #10 corrected it with client-0 (seq 3). The deployed realm still accepts ethereum-1.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 2,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.voucher",
+      "kind": 5,
+      "category": "ethereum",
+      "title": "Register a GnoVoucher on Ethereum (kind 5)",
+      "description": "Registers the GnoVoucher of a gno denom on the Ethereum route, pinned to its code hash (setCustomERC20).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthVoucherRequest(cross(cur), \"{{clientID}}\", \"{{baseDenom}}\", \"{{voucher}}\", \"{{codeHash}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthVoucherRequest(cross(cur), \"{{clientID}}\", \"{{baseDenom}}\", \"{{voucher}}\", \"{{codeHash}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0). Never the gno id (ethereum-1). The deployed realm only checks the router-id grammar (client-N or a custom id), so it ACCEPTS ethereum-1 and the decision is dispatched anyway (see pitfalls); the current branch refuses it. The UI must enforce client-0.",
+          "help": "The router's client id of the route on Ethereum.",
+          "default": "client-0"
+        },
+        {
+          "name": "baseDenom",
+          "type": "denom",
+          "validation": "a gno wire denom: native [a-z][a-z0-9]{2,15} (e.g. ugnot) or GRC20 alias gno.land:r:<seg>:<seg>[.<slug>]; never a realm coin /gno.land/r/...:x.",
+          "help": "Gno denom.",
+          "default": "ugnot"
+        },
+        {
+          "name": "voucher",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "GnoVoucher contract on Ethereum.",
+          "default": "0x3c15f5ca79d6051fc582d8e7efb0b39da3cb3212"
+        },
+        {
+          "name": "codeHash",
+          "type": "hex",
+          "validation": "32-byte hash, 64 hex digits, optional 0x.",
+          "help": "Code hash the Ethereum contract is pinned to (keccak256 of its runtime code)."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.client",
+      "kind": 6,
+      "category": "ethereum",
+      "title": "Add (op 1) or migrate (op 2) a router light client (kind 6)",
+      "description": "Adds a router light client under a custom id paired with a gno client (op 1), or migrates an existing router client's light client (op 2).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthClientRequest(cross(cur), {{op}}, \"{{clientID}}\", \"{{counterpartyClientID}}\", \"{{merklePrefix}}\", \"{{lightClient}}\", \"{{codeHash}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthClientRequest(cross(cur), {{op}}, \"{{clientID}}\", \"{{counterpartyClientID}}\", \"{{merklePrefix}}\", \"{{lightClient}}\", \"{{codeHash}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "op",
+          "type": "int",
+          "validation": "1 add, 2 migrate.",
+          "help": "Operation."
+        },
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "op 1: a CUSTOM id (4-128 chars of a-zA-Z0-9._+-#[]<>, not starting client- or channel-) that the gno counterparty is paired with (current branch checks core.CounterpartyClientID(counterparty) == clientID; deployed does not); op 2: a router client this realm pairs with a governed gno client (live client-0).",
+          "help": "Router client id."
+        },
+        {
+          "name": "counterpartyClientID",
+          "type": "gno client id",
+          "validation": "op 1: an existing gno client (the new local client created for the replacement); op 2: \"\" or a router id.",
+          "help": "Gno client the router client tracks."
+        },
+        {
+          "name": "merklePrefix",
+          "type": "hex",
+          "validation": "comma-separated hex items; gno.land's: 6d61696e,2f70762f766d3a676e6f2e6c616e642f722f6169622f6962632f636f72653a (\"main\", \"/pv/vm:gno.land/r/aib/ibc/core:\").",
+          "help": "Merkle prefix of gno.land.",
+          "default": "6d61696e,2f70762f766d3a676e6f2e6c616e642f722f6169622f6962632f636f72653a"
+        },
+        {
+          "name": "lightClient",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "Light client contract on Ethereum."
+        },
+        {
+          "name": "codeHash",
+          "type": "hex",
+          "validation": "32-byte hash, 64 hex digits, optional 0x.",
+          "help": "Code hash the Ethereum contract is pinned to (keccak256 of its runtime code)."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Order for a replacement: create a new gno client and register its counterparty as the new custom router id FIRST (core.RegisterCounterparty, relayer tooling), then kind 6 op 1, then eth.route_replacement (kind 10); kind 10 refuses a new client Ethereum has not added.",
+        "Deployed realm accepted op 1 gno-test-2 with counterparty ethereum-1 (paired with client-0); the current branch refuses it ('the gno client ethereum-1 is paired with client-0'). Enforce the pairing in the UI.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 2,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.upgrade",
+      "kind": 7,
+      "category": "ethereum",
+      "title": "Upgrade an Ethereum proxy (kind 7)",
+      "description": "Upgrades a proxy contract to an implementation pinned to its code hash, with an optional call.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthUpgradeRequest(cross(cur), \"{{proxy}}\", \"{{implementation}}\", \"{{codeHash}}\", \"{{call}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthUpgradeRequest(cross(cur), \"{{proxy}}\", \"{{implementation}}\", \"{{codeHash}}\", \"{{call}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "proxy",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "Proxy (e.g. ICS20 0xe44499e840797b6b452f074100bc66030dbf69f5)."
+        },
+        {
+          "name": "implementation",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "New implementation."
+        },
+        {
+          "name": "codeHash",
+          "type": "hex",
+          "validation": "32-byte hash, 64 hex digits, optional 0x.",
+          "help": "Code hash the Ethereum contract is pinned to (keccak256 of its runtime code)."
+        },
+        {
+          "name": "call",
+          "type": "hex",
+          "validation": "\"\" or hex calldata.",
+          "help": "Post-upgrade call.",
+          "default": ""
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.role",
+      "kind": 8,
+      "category": "ethereum",
+      "title": "Grant/revoke an AccessManager role (kind 8)",
+      "description": "Grants or revokes a non-admin AccessManager role on Ethereum (the relayer allow-list).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthRoleRequest(cross(cur), {{grant}}, {{roleID}}, \"{{account}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthRoleRequest(cross(cur), {{grant}}, {{roleID}}, \"{{account}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "grant",
+          "type": "bool",
+          "validation": "true or false.",
+          "help": "Grant (true) or revoke (false)."
+        },
+        {
+          "name": "roleID",
+          "type": "uint64",
+          "validation": "not 0 (ADMIN_ROLE) and not 18446744073709551615 (PUBLIC_ROLE).",
+          "help": "Role id."
+        },
+        {
+          "name": "account",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "Account."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.handover",
+      "kind": 9,
+      "category": "ethereum",
+      "title": "Hand over IBCAdmin's executor (kind 9)",
+      "description": "Swaps IBCAdmin's executor to a new contract pinned to its code hash; the migration call is always empty.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthHandOverRequest(cross(cur), \"{{exec}}\", \"{{codeHash}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthHandOverRequest(cross(cur), \"{{exec}}\", \"{{codeHash}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "exec",
+          "type": "hex",
+          "validation": "Ethereum address 0x + 40 hex (any case; checksummed text is shown).",
+          "help": "New executor."
+        },
+        {
+          "name": "codeHash",
+          "type": "hex",
+          "validation": "32-byte hash, 64 hex digits, optional 0x.",
+          "help": "Code hash the Ethereum contract is pinned to (keccak256 of its runtime code)."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.route_replacement",
+      "kind": 10,
+      "category": "ethereum",
+      "title": "Replace the route's router client on Ethereum (kind 10)",
+      "description": "Retires and freezes the old router client, migrates its route to a new custom router client and opens IBCAdmin's next epoch over it; records the expected epoch transition here (an 'expect transition' decision, queued 7 days).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthRouteReplacementRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", {{suspectFrom}}, \"{{localClientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthRouteReplacementRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", {{suspectFrom}}, \"{{localClientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "oldClientID",
+          "type": "router client id",
+          "validation": "router client reachable from the epoch client's counterparty (live client-0).",
+          "help": "Old router client.",
+          "default": "client-0"
+        },
+        {
+          "name": "newClientID",
+          "type": "router client id",
+          "validation": "custom id (not client-N), added by kind 6 op 1 first, != old.",
+          "help": "New router client."
+        },
+        {
+          "name": "suspectFrom",
+          "type": "uint64",
+          "validation": "Ethereum block number.",
+          "help": "Ethereum block from which acks/timeouts through the old client are suspect."
+        },
+        {
+          "name": "localClientID",
+          "type": "gno client id",
+          "validation": "Active Ethereum gno client, not retired, counterparty == newClientID, authenticating the governance route identity.",
+          "help": "Gno client that will carry the epoch."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum. Its epoch notice then comes back over the new client and moves the epoch.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Records a second decision 'expect transition' queued 7 days; Execute it, or the notice is refused (IBCAdmin re-sends it).",
+        "At most 4 expected successors per router client; 64 transitions incl. tombstones.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.route_settings",
+      "kind": 11,
+      "category": "ethereum",
+      "title": "Set the route quarantine (kind 11)",
+      "description": "Sets the route's quarantine after a validator-set transition, in seconds (0 disables).",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthRouteSettingsRequest(cross(cur), \"{{clientID}}\", {{quarantineSeconds}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthRouteSettingsRequest(cross(cur), \"{{clientID}}\", {{quarantineSeconds}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0). Never the gno id (ethereum-1). The deployed realm only checks the router-id grammar (client-N or a custom id), so it ACCEPTS ethereum-1 and the decision is dispatched anyway (see pitfalls); the current branch refuses it. The UI must enforce client-0.",
+          "help": "The router's client id of the route on Ethereum.",
+          "default": "client-0"
+        },
+        {
+          "name": "quarantineSeconds",
+          "type": "uint64",
+          "validation": ">= 0.",
+          "help": "Quarantine seconds.",
+          "default": "3600"
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.settle",
+      "kind": 12,
+      "category": "ethereum",
+      "title": "Settle retired router-client sends on Ethereum (kind 12)",
+      "description": "Applies a reconciliation's outcomes to the send records of a router client a replacement retired.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthSettleRequest(cross(cur), \"{{clientID}}\", \"{{items}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthSettleRequest(cross(cur), \"{{clientID}}\", \"{{items}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "a router client of the route, current or retired (current branch: routerHistory + counterparties; deployed: grammar only). Ethereum refuses a client it has not retired.",
+          "help": "Retired router client."
+        },
+        {
+          "name": "items",
+          "type": "string",
+          "validation": "comma-separated seq:action:amount, 1 to 8 items, seq > 0, action 1..5 (1 refund remainder, 2 reject queued (0), 3 delivered (0), 4 forged refund (amount = paid > 0), 5 forged receive (inbound seq, > 0)), each seq once per direction, amount < 2^256.",
+          "help": "Items."
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "Simulated with client-0, which is not retired on Ethereum: it would be dispatched and spent there.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.reopen",
+      "kind": 13,
+      "category": "ethereum",
+      "title": "Reopen the route on Ethereum (kind 13)",
+      "description": "Reopens the route a replacement or emergency recovery closed; Ethereum refuses it while any retired send record is open.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthReopenRequest(cross(cur), \"{{clientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthReopenRequest(cross(cur), \"{{clientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0). Never the gno id (ethereum-1). The deployed realm only checks the router-id grammar (client-N or a custom id), so it ACCEPTS ethereum-1 and the decision is dispatched anyway (see pitfalls); the current branch refuses it. The UI must enforce client-0.",
+          "help": "The router's client id of the route on Ethereum.",
+          "default": "client-0"
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet (epoch 1 over ethereum-1). The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena."
+      },
+      "pitfalls": [
+        "The route is open on Ethereum now: a real dispatch would be spent there.",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due; read IBCAdmin.decision(epoch, seq).",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "eth.retransmit",
+      "category": "ethereum",
+      "title": "Authorize one re-send of a conflicted dispatch",
+      "description": "Authorizes, at once, one re-send of a current-epoch dispatch IBCAdmin answered with a conflict and no redispatch, after governance checked on Ethereum that the conflict was fabricated. Used up by one Redispatch.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRetransmitRequest(cross(cur), {{epoch}}, {{seq}}))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRetransmitRequest(cross(cur), {{epoch}}, {{seq}}).Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "epoch",
+          "type": "uint32",
+          "validation": "the current epoch (ibcgov.Epoch(), live 1).",
+          "help": "Epoch.",
+          "default": "1"
+        },
+        {
+          "name": "seq",
+          "type": "uint64",
+          "validation": "a dispatched seq whose status is conflict (4) without redispatch (render ibcgov:dispatch/<e>/<seq>).",
+          "help": "Seq."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.redispatch",
+      "category": "ethereum",
+      "title": "Redispatch a governance packet",
+      "description": "Sends a current-epoch decision again in a fresh packet with identical bytes, whenever none is in flight (after a timeout, error ack, redispatch=1, or even a success); a conflict needs eth.retransmit first. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "Redispatch",
+        "args": ["{{epoch}}", "{{seq}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "epoch",
+          "type": "uint32",
+          "validation": "current epoch.",
+          "help": "Epoch.",
+          "default": "1"
+        },
+        {
+          "name": "seq",
+          "type": "uint64",
+          "validation": "1..LastSeq(epoch); in_flight false.",
+          "help": "Seq."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.expect_recovery",
+      "category": "ethereum",
+      "title": "Expect Ethereum's emergency recovery",
+      "description": "Records, after 7 days, that Ethereum's emergency recovery is to move the governance epoch from one router client to another, carried here by a named gno client; this is what lets the recovery's epoch notice be accepted.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewExpectRecoveryRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewExpectRecoveryRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "oldClientID",
+          "type": "router client id",
+          "validation": "reachable from the epoch client's counterparty (live client-0).",
+          "help": "Old router client.",
+          "default": "client-0"
+        },
+        {
+          "name": "newClientID",
+          "type": "router client id",
+          "validation": "custom id, != old.",
+          "help": "Recovery's new router client."
+        },
+        {
+          "name": "localClientID",
+          "type": "gno client id",
+          "validation": "Active, not retired, counterparty == newClientID, authenticating the governance route identity.",
+          "help": "Gno client carrying the epoch."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "pitfalls": [
+        "Must land within Ethereum's own recovery delay (30 days mainnet, 1 h testnet).",
+        "Refused when recorded if the graph changed: the decision is spent."
+      ],
+      "roles": ["governor", "govdao"],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.remove_expectation",
+      "category": "ethereum",
+      "title": "Remove an expected transition",
+      "description": "Removes, at once, an active expected transition (tightening); leaves a tombstone.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewRemoveExpectationRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewRemoveExpectationRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "oldClientID",
+          "type": "router client id",
+          "validation": "",
+          "help": "From."
+        },
+        {
+          "name": "newClientID",
+          "type": "router client id",
+          "validation": "",
+          "help": "To."
+        },
+        {
+          "name": "localClientID",
+          "type": "gno client id",
+          "validation": "not the epoch's own client; no proven notice pinning it.",
+          "help": "Carrier."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.purge_tombstone",
+      "category": "ethereum",
+      "title": "Purge a tombstone",
+      "description": "Drops, after 7 days, the tombstone a removed or released transition left, freeing its place in the 64-transition budget.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewPurgeTombstoneRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewPurgeTombstoneRequest(cross(cur), \"{{oldClientID}}\", \"{{newClientID}}\", \"{{localClientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "oldClientID",
+          "type": "router client id",
+          "validation": "",
+          "help": "From."
+        },
+        {
+          "name": "newClientID",
+          "type": "router client id",
+          "validation": "",
+          "help": "To."
+        },
+        {
+          "name": "localClientID",
+          "type": "gno client id",
+          "validation": "a tombstone must exist for the triple (ibcgov.Tombstones() count).",
+          "help": "Carrier."
+        }
+      ],
+      "timing": {
+        "gno": "queued",
+        "execute_needed": true,
+        "delay_seconds_testnet": 3600,
+        "delay_seconds_mainnet": 604800
+      },
+      "roles": ["governor", "govdao"],
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.apply_epoch_notice",
+      "category": "ethereum",
+      "title": "Apply a proven multi-step epoch notice",
+      "description": "Applies an epoch notice the core proved more than one step ahead, along a path of expected transitions. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "ApplyEpochNotice",
+        "args": ["{{epoch}}", "{{client}}", "{{path}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "epoch",
+          "type": "uint32",
+          "validation": "current+1..current+64, a proven notice.",
+          "help": "Epoch."
+        },
+        {
+          "name": "client",
+          "type": "gno client id",
+          "validation": "the client the notice was proven over.",
+          "help": "Client."
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "validation": "comma-separated routerClient/localClient steps, exactly epoch-current of them, ending at the notice's source/client.",
+          "help": "Path."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "eth.prune_gov_retirements",
+      "category": "ethereum",
+      "title": "Prune governance retirements",
+      "description": "Retires for governance up to n gno clients a replacement retired for transfers once off every expected path. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/ibcgov",
+        "func": "PruneGovRetirements",
+        "args": ["{{n}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "n",
+          "type": "int",
+          "validation": "1 to 64.",
+          "help": "Count.",
+          "default": "64"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.claim",
+      "category": "transfer-anyone",
+      "title": "Claim (pay waiting claims)",
+      "description": "Pays up to n waiting claims of a denom on the route within its meters; credits from Ethereum are paid only this way. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/apps/transfer",
+        "func": "Claim",
+        "args": ["{{clientID}}", "{{denom}}", "{{n}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "the route's gno client.",
+          "help": "Route.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "n",
+          "type": "int",
+          "validation": ">= 1; values above 20 are clamped to 20.",
+          "help": "Batch size.",
+          "default": "20"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Pays nothing (returns 0) under a payouts flag, on a closed route, or while a loss is unrestored."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 3,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.claim_refunds",
+      "category": "transfer-anyone",
+      "title": "ClaimRefunds (pay queued refunds)",
+      "description": "Pays up to n queued refunds of a denom under the refund meter. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/apps/transfer",
+        "func": "ClaimRefunds",
+        "args": ["{{clientID}}", "{{denom}}", "{{n}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "gno client id",
+          "validation": "route's gno client.",
+          "help": "Route.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "denom",
+          "type": "denom",
+          "validation": "1 to 128 characters of letters, digits and /:._- (ibcgov.isDenom).",
+          "help": "Denom: ugnot, a GRC20 alias, or a voucher ibc/<hash>.",
+          "default": "ugnot"
+        },
+        {
+          "name": "n",
+          "type": "int",
+          "validation": ">= 1, clamped to 20.",
+          "help": "Batch.",
+          "default": "20"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": ["Pays nothing under a refunds hold or on a closed route."],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "transfer.recapitalize",
+      "category": "transfer-anyone",
+      "title": "Pay a recapitalization",
+      "description": "Pays an authorized recapitalization into the route's escrow. Coin denom: direct m_call sending exactly the amount; GRC20: approve the transfer realm first.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/apps/transfer",
+        "func": "Recapitalize",
+        "args": ["{{route}}", "{{id}}"],
+        "send": "{{amount}}{{denom}}"
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "id",
+          "type": "int",
+          "validation": "an authorized, unpaid recap id.",
+          "help": "Authorization id."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [
+        "Must be a direct m_call (IsUserCall) for coins: an m_run does not pass the send."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "transfer.continue_reopen",
+      "category": "transfer-anyone",
+      "title": "Continue a reopening",
+      "description": "Runs the next batch of a route's reopening started by a reopen decision. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/apps/transfer",
+        "func": "ContinueReopen",
+        "args": ["{{route}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 1
+      }
+    },
+    {
+      "id": "transfer.prepare_replacement",
+      "category": "transfer-anyone",
+      "title": "Prepare a replacement",
+      "description": "Walks up to n send records of retired clients and reserves refunds they may owe; required before settlements, sweeps, credits or a reopen apply. Anyone.",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/aib/ibc/apps/transfer",
+        "func": "PrepareReplacement",
+        "args": ["{{route}}", "{{n}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "gno client id",
+          "validation": "a route key or one of its gno clients (current or retired); the route must be enrolled (ibcgov.IsRoute). The gno-side id, never the router's client-N.",
+          "help": "The gno.land Ethereum route, named by its gno client id.",
+          "default": "ethereum-1"
+        },
+        {
+          "name": "n",
+          "type": "int",
+          "validation": "1 to 64.",
+          "help": "Batch.",
+          "default": "64"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "govdao.propose",
+      "category": "govdao",
+      "title": "Create a GovDAO proposal carrying an ibcgov request",
+      "description": "A GovDAO member wraps any ibcgov builder's Request in a proposal: dao.MustCreateProposal(cross(cur), req.Proposal()). The builder's checks run at creation; the decision is recorded when the proposal executes.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), {{EXPR}}.Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "EXPR",
+          "type": "string",
+          "validation": "an ibcgov builder call from this catalog.",
+          "help": "The request."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Creating does nothing to ibcgov. The proposal must be EXECUTED within the 14-day deadline counted from creation (testnet: 7200 s = 2 h!), else the closure returns an error and GovDAO denies it for good."
+      },
+      "pitfalls": [
+        "Before the yield, creation works but execution panics ('a GovDAO proposal is refused until the yield'); the proposal stays executable for a retry after the yield, within its deadline.",
+        "Proposal id: ProposalCreated event attr id (or the println).",
+        "Title is 'gno.land/r/aib/ibc/ibcgov: <kind>', description the decision text."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 2,
+        "refused": 3
+      }
+    },
+    {
+      "id": "govdao.vote",
+      "category": "govdao",
+      "title": "Vote on a GovDAO proposal",
+      "description": "A member votes YES/NO/ABSTAIN once per proposal. Supermajority 66.66% of current total power: with 3 T1 members (power 3 each) 2 YES are needed.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/gov/dao",
+        "func": "MustVoteOnProposalSimple",
+        "args": ["{{pid}}", "{{option}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "pid",
+          "type": "int",
+          "validation": "existing proposal id (render gno.land/r/gov/dao:).",
+          "help": "Proposal id."
+        },
+        {
+          "name": "option",
+          "type": "string",
+          "validation": "YES, NO or ABSTAIN.",
+          "help": "Vote.",
+          "default": "YES"
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false
+      },
+      "pitfalls": [],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 2
+      }
+    },
+    {
+      "id": "govdao.execute",
+      "category": "govdao",
+      "title": "Execute a GovDAO proposal",
+      "description": "Anyone executes an accepted proposal; this runs the ibcgov closure, which records the decision (at once or queued).",
+      "roles": ["anyone"],
+      "tx": {
+        "type": "/vm.m_call",
+        "pkg_path": "gno.land/r/gov/dao",
+        "func": "ExecuteProposal",
+        "args": ["{{pid}}"],
+        "send": ""
+      },
+      "params": [
+        {
+          "name": "pid",
+          "type": "int",
+          "validation": "a proposal that reached supermajority.",
+          "help": "Proposal id."
+        }
+      ],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Then, for a queued decision, ibcgov Execute after the delay."
+      },
+      "pitfalls": [
+        "Panics (proposal stays open) if not yet at supermajority, or before the yield for an ibcgov request.",
+        "ExecuteOrRejectProposal marks it denied instead of panicking when the executor errors."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 0,
+        "refused": 2
+      }
+    },
+    {
+      "id": "govdao.core_pause_direct",
+      "category": "govdao",
+      "title": "GovDAO direct: pause the core",
+      "description": "Pauses the core packet path directly through the core authority (no ibcgov ledger, works before the yield). Tightening only; the matching loosening is an ibcgov decision.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/core\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), core.NewPauseProposalRequest(cross(cur)))\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Applies when the proposal executes (2 of 3 YES, then ExecuteProposal). No 14-day closure deadline here."
+      },
+      "pitfalls": [
+        "Requires the GovDAO proxy to stay a core/transfer authority member (core.AuthorityMembers())."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "govdao.core_pause_app_direct",
+      "category": "govdao",
+      "title": "GovDAO direct: pause an app",
+      "description": "Pauses an app directly through the core authority. Tightening only; the matching loosening is an ibcgov decision.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/core\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), core.NewPauseAppProposalRequest(cross(cur), \"{{portID}}\"))\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Applies when the proposal executes (2 of 3 YES, then ExecuteProposal). No 14-day closure deadline here."
+      },
+      "pitfalls": [
+        "Requires the GovDAO proxy to stay a core/transfer authority member (core.AuthorityMembers())."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "govdao.core_reject_app_direct",
+      "category": "govdao",
+      "title": "GovDAO direct: reject a pending app",
+      "description": "Drops a pending registration directly. Tightening only; the matching loosening is an ibcgov decision.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/core\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), core.NewRejectAppProposalRequest(cross(cur), \"{{portID}}\", \"{{pkgPath}}\"))\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Applies when the proposal executes (2 of 3 YES, then ExecuteProposal). No 14-day closure deadline here."
+      },
+      "pitfalls": [
+        "Requires the GovDAO proxy to stay a core/transfer authority member (core.AuthorityMembers())."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    },
+    {
+      "id": "govdao.transfer_block_direct",
+      "category": "govdao",
+      "title": "GovDAO direct: block an address",
+      "description": "Blocks an address in the transfer app directly. Tightening only; the matching loosening is an ibcgov decision.",
+      "roles": ["govdao"],
+      "tx": {
+        "type": "/vm.m_run",
+        "source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/apps/transfer\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), transfer.NewBlockAddressProposalRequest(cross(cur), address(\"{{addr}}\")))\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [],
+      "timing": {
+        "gno": "immediate",
+        "execute_needed": false,
+        "notes": "Applies when the proposal executes (2 of 3 YES, then ExecuteProposal). No 14-day closure deadline here."
+      },
+      "pitfalls": [
+        "Requires the GovDAO proxy to stay a core/transfer authority member (core.AuthorityMembers())."
+      ],
+      "kind": null,
+      "verification": {
+        "ok": 1,
+        "refused": 0
+      }
+    }
+  ]
+}

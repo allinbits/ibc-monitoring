@@ -766,3 +766,225 @@ code,
 .card-heading .prov-details {
   min-width: 0;
 }
+
+.gov-wallet-heading,
+.gov-buttons,
+.field-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.gov-wallet-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.gov-wallet-heading h3 {
+  margin: 0;
+}
+.gov-wallet-heading .eyebrow {
+  margin-bottom: 8px;
+}
+.button-primary {
+  background: var(--green);
+  color: var(--surface);
+  border-color: var(--green);
+}
+.button-primary:hover {
+  background: var(--ink);
+  color: var(--surface);
+}
+.gov-wallet-state,
+.signing-review {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  padding: 14px 18px;
+  border-radius: 9px;
+}
+.gov-wallet-state p,
+.eth-followup p {
+  margin-block: 6px;
+}
+.break-word {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.action-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+  gap: 24px;
+  align-items: start;
+}
+.action-catalog,
+.action-form,
+.action-form-anchor {
+  min-width: 0;
+}
+.action-catalog {
+  max-height: 850px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+.action-catalog > details {
+  border-bottom: 1px solid var(--line);
+}
+.governance-actions summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.catalog-action {
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 6px;
+  background: var(--soft);
+}
+.catalog-action.selected {
+  background: var(--accent);
+  box-shadow: inset 3px 0 var(--green);
+}
+.catalog-action > button:first-child {
+  text-align: left;
+  border: 0;
+  padding: 0;
+  background: none;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.catalog-action p {
+  margin: 6px 0;
+}
+.action-form-anchor {
+  scroll-margin-top: 20px;
+}
+.action-form .card-heading h4 {
+  margin: 0;
+}
+.action-form .notice {
+  margin-block: 12px;
+}
+.action-pitfalls ul {
+  padding-left: 20px;
+  font-size: 12px;
+}
+.action-pitfalls li + li {
+  margin-top: 6px;
+}
+.action-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+  min-width: 0;
+}
+.action-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.action-field {
+  min-width: 0;
+}
+.action-field p {
+  margin: 5px 0 0;
+}
+.field-heading {
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+.field-heading label {
+  font-weight: 550;
+}
+.governance-actions input:not([type="checkbox"]),
+.governance-actions select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 10px;
+}
+.governance-actions input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.confirm-yield {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  background: var(--warn-bg);
+  margin-bottom: 16px;
+}
+.confirm-yield input {
+  flex: none;
+  margin-top: 5px;
+}
+.tx-preview pre {
+  max-width: 100%;
+  max-height: 440px;
+  overflow: auto;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gov-followups {
+  border-top: 1px solid var(--line);
+  margin-top: 24px;
+  padding-top: 8px;
+  min-width: 0;
+}
+.followup-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.followup-item h5 {
+  margin: 0 0 8px;
+}
+.proposal-copy {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 11px;
+}
+.eth-followup {
+  min-width: 0;
+  max-width: 550px;
+  padding-block: 10px;
+}
+td .eth-followup {
+  min-width: 220px;
+}
+@media (max-width: 800px) {
+  .action-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .action-catalog {
+    max-height: 420px;
+  }
+}
+@media (max-width: 480px) {
+  .action-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gov-wallet-state,
+  .signing-review {
+    padding: 12px;
+  }
+  .governance-actions .button {
+    min-height: 42px;
+  }
+}
+
+.governance-actions {
+  overflow-wrap: anywhere;
+}

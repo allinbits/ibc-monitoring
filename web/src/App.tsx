@@ -87,7 +87,8 @@ export function App() {
         <p>
           gno.land / IBC monitoring
           <br />
-          Read-only snapshots, with source and verification details. Refreshes every 10 seconds.
+          Snapshots refresh every 10 seconds. Governance actions use your connected wallet and live
+          RPC state.
         </p>
         {info && (
           <p>

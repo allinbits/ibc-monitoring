@@ -1,3 +1,4 @@
+import { GovernanceActions, EthereumDecisionAction } from "../governance/GovernanceActions";
 import { Label } from "../Help";
 import { useQuery } from "@tanstack/react-query";
 import { api, type EthGovernance, type GnoGovernance } from "../api";
@@ -241,7 +242,10 @@ function GnoSide({ g }: { g: GnoGovernance }) {
                 <td>
                   <Pill kind={statusKind(d.state)}>{d.state}</Pill>
                 </td>
-                <td className="text">{d.text}</td>
+                <td className="text">
+                  {d.text}
+                  {d.note && <p className="muted small">{d.note}</p>}
+                </td>
                 <td>{unix(d.applied || d.cancelled || d.recorded)}</td>
               </tr>
             ))}
@@ -432,6 +436,11 @@ function EthSide({ e }: { e: EthGovernance }) {
                 </td>
                 <td>
                   <Id v={d.hash} />
+                  <EthereumDecisionAction
+                    decision={d}
+                    currentEpoch={e.epoch}
+                    blocked={!!e.hold || !!e.recovery.opened_at}
+                  />
                 </td>
               </tr>
             ))}
@@ -455,12 +464,14 @@ export function GovernancePage() {
     return (
       <>
         <PageHeading title="Governance" />
+        <GovernanceActions />
         <Loading error={q.error} retry={() => void q.refetch()} />
       </>
     );
   return (
     <>
       <PageHeading title="Governance" />
+      <GovernanceActions />
       <QueryNotice error={q.error} fetching={q.isFetching} retry={() => void q.refetch()} />
       <p className="page-copy">
         Decision text and envelopes are the original records. Amounts embedded in decision text are

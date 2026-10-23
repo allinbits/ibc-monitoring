@@ -1,5 +1,41 @@
+import { actions } from "./governance/catalog";
+
 // Definitions adapted from the monitoring glossary; keep all help copy here.
 export const glossary: Record<string, string> = {
+  "governance roles":
+    "Roles are read from live test-ibc-1 state: the governor only before yielding; GovDAO membership and tier; guardian seats 0–3; watch seats 4–5. Anyone means any funded account. ibcgov builders use a governor script before the yield and a GovDAO proposal afterwards.",
+  "governance timing":
+    "On this testnet the gno decision delay is 3,600 seconds. A GovDAO ibcgov proposal must execute within 7,200 seconds of creation. Ethereum has its own delays after the relayer delivers: DAY 514 seconds, WEEK 3,598 seconds. Mainnet timings are longer.",
+  "govdao proposal":
+    "A member creates a proposal with an m_run script; eligible members vote YES, NO or ABSTAIN. A 66.66% YES supermajority lets anyone execute it. With the three live T1 members, two YES votes suffice. ibcgov proposals execute only after the governor yields; a queued decision still needs its own Execute later.",
+  "proposal execution deadline":
+    "Execute an ibcgov proposal within 7,200 seconds (2 hours) of its creation block time on test-ibc-1. After that its closure is expired and cannot enact the decision. Direct core/transfer authority proposals have no ibcgov closure deadline. Unknown creation times disable execution until verified.",
+  "router client id":
+    "The Ethereum router's current route client is queried through core.CounterpartyClientID(ibcgov.EpochClient()), currently client-0. ethereum-1 is a gno client id and must never be supplied in its place, even though the older deployed governance realm accepts it. Replacement clients use paired custom router ids.",
+  "ethereum governance follow-up":
+    "Ethereum kinds 1–13 send an IBC governance packet when recorded. The relayer delivers it to IBCAdmin on Sepolia; after its delay, anyone calls execute(uint64 seq). The seq is in GovPacketSent. MetaMask uses the live Ethereum state to check the epoch and simulate the call before sending.",
+  ...Object.fromEntries(
+    actions.map((action) => [
+      `governance action ${action.id}`,
+      [
+        action.description,
+        `Timing: ${action.timing.gno}.`,
+        action.timing.notes,
+        action.timing.ethereum,
+        ...action.pitfalls,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    ]),
+  ),
+  ...Object.fromEntries(
+    actions.flatMap((action) =>
+      action.params.map((param) => [
+        `governance param ${action.id}.${param.name}`.toLowerCase(),
+        `${param.help} ${param.validation}`,
+      ]),
+    ),
+  ),
   "base units":
     "Every amount is an exact integer in the token's smallest unit (uint256, sent as a decimal string). Decimals change only how the console displays it, never the value.",
   "unix seconds":
