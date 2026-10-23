@@ -55,7 +55,9 @@ func (v *Views) Governance(ctx context.Context, routes []string, p Pin) (model.G
 	if err != nil {
 		return g, err
 	}
-	g.Governor = val.Raw
+	// An address renders quoted (`("g1..." .uverse.address)`): the quotes
+	// are qeval's, not the governor's.
+	g.Governor = addressOf(val.Raw)
 	if val, err = v.eval(ctx, pkg, "Yielded()", p); err != nil {
 		return g, err
 	}
@@ -151,8 +153,9 @@ func (v *Views) Governance(ctx context.Context, routes []string, p Pin) (model.G
 	return g, nil
 }
 
-// addressOf strips the type suffix qeval gives an address value: an address
-// renders as its bech32 text, e.g. `(g1... address)` or `("g1..." string)`.
+// addressOf reads an address value's text: qeval renders an address as its
+// quoted bech32 text (`("g1..." .uverse.address)`); older nodes rendered it
+// bare (`(g1... address)`).
 func addressOf(raw string) string {
 	s := strings.TrimSpace(raw)
 	if u, err := strconv.Unquote(s); err == nil {
