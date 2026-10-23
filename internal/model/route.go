@@ -61,6 +61,22 @@ type Denom struct {
 	// Decimals is the governed decimals of the denom's voucher on gno.land
 	// (fixed when the voucher is first minted); 0 for an unescrowed denom.
 	Decimals int `json:"decimals"`
+	// DisplayDecimals is the precision every amount of this denom is shown
+	// in: the governed voucher decimals for a minted denom, the native
+	// denom's precision for an unescrowed one (ugnot: 6, one GNOT being
+	// 10^6 ugnot), and 0 (base units) for a native denom of unknown
+	// precision. The config's decimals of an unescrowed denom is 0 and
+	// never a display precision.
+	DisplayDecimals int `json:"display_decimals"`
+	// DayCap is the bridge meter's ceiling and daily refill, the realm's
+	// Denom.DayCap(lock): the cap floor for a minted denom, max(cap floor,
+	// lock/10) for an unescrowed one. Exact; derived from the config and
+	// the lock read at the same height.
+	DayCap Amount `json:"day_cap"`
+	// Supply is the gno voucher's total supply of a minted denom
+	// (voucher/<denom>, exact); nil for an unescrowed denom or a minted one
+	// awaiting its first receive.
+	Supply *Amount `json:"supply,omitempty"`
 	// Token is the denom's ERC20 on Ethereum: Remote for an unescrow denom;
 	// for a minted denom the base of its denom trace (denoms/ibc/<hash>),
 	// since Remote is empty there by the realm's rule (design §4.1).
@@ -83,20 +99,115 @@ type Denom struct {
 
 // Route is a gno.land Ethereum route as the transfer realm reports it.
 type Route struct {
-	Key                 string     `json:"route"`
-	Client              string     `json:"client"`
-	Replaced            []string   `json:"replaced"`
-	Enrolled            time.Time  `json:"enrolled"`
-	Activated           uint64     `json:"activated"`
-	Closed              bool       `json:"closed"`
-	LossClosed          bool       `json:"loss_closed"`
-	FeeCollector        string     `json:"fee_collector"`
-	RefusedRecipients   []string   `json:"refused_recipients"`
-	ProtectedRecipients []string   `json:"protected_recipients"`
-	Unrecovered         Amount     `json:"unrecovered"`
-	Unresolved          Amount     `json:"unresolved"`
-	Denoms              []Denom    `json:"denoms"`
-	Provenance          Provenance `json:"provenance"`
+	Key                 string    `json:"route"`
+	Client              string    `json:"client"`
+	Replaced            []string  `json:"replaced"`
+	Enrolled            time.Time `json:"enrolled"`
+	Activated           uint64    `json:"activated"`
+	Closed              bool      `json:"closed"`
+	LossClosed          bool      `json:"loss_closed"`
+	FeeCollector        string    `json:"fee_collector"`
+	RefusedRecipients   []string  `json:"refused_recipients"`
+	ProtectedRecipients []string  `json:"protected_recipients"`
+	// Unrecovered and Unresolved are the realm's route-wide sums of the
+	// denoms' totals in base units: a sum across denoms of different
+	// precisions, meaningful as zero or not; the per-denom totals carry
+	// the amounts.
+	Unrecovered Amount  `json:"unrecovered"`
+	Unresolved  Amount  `json:"unresolved"`
+	Denoms      []Denom `json:"denoms"`
+	// The route's records, every page (routes/<route>/{claims,sweeps,
+	// sends,losses}), in the realm's storage-key order.
+	Claims     []Claim    `json:"claims"`
+	Sweeps     []Sweep    `json:"sweeps"`
+	Sends      []Send     `json:"sends"`
+	Losses     []Loss     `json:"losses"`
+	Provenance Provenance `json:"provenance"`
+}
+
+// Claim is a receive credited on gno.land and paid out through the bridge
+// meter (routes/<route>/claims). Amount already has reductions subtracted;
+// the remainder is Amount − Paid.
+type Claim struct {
+	Key     string `json:"key"`
+	Denom   string `json:"denom"`
+	To      string `json:"to"`
+	Amount  Amount `json:"amount"`
+	Paid    Amount `json:"paid"`
+	Reduced Amount `json:"reduced"`
+	Fee     Amount `json:"fee"`
+	State   string `json:"state"` // open | withheld | forged | done
+	By      string `json:"by"`    // packet | vote
+	At      int64  `json:"at"`    // unix seconds
+	Height  int64  `json:"height"`
+	Seq     int64  `json:"seq"`
+}
+
+// Sweep is a sweep entry (routes/<route>/sweeps): an amount moved out of the
+// claim queue to be paid by decision.
+type Sweep struct {
+	Key     string `json:"key"`
+	Denom   string `json:"denom"`
+	To      string `json:"to"`
+	Amount  Amount `json:"amount"`
+	Reduced Amount `json:"reduced"`
+	// Reason is the realm's reason text ("reason" in the realm's JSON; the
+	// API's public filter blanks every "reason" key).
+	Reason    string  `json:"sweep_reason"`
+	Height    int64   `json:"height"`
+	Voided    bool    `json:"voided"`
+	Paid      bool    `json:"paid"`
+	PaidTo    string  `json:"paid_to"`
+	FromClaim bool    `json:"from_claim,omitempty"`
+	ClaimPaid *Amount `json:"claim_paid,omitempty"`
+}
+
+// Send is a gno.land send record (routes/<route>/sends) without its payload
+// bytes: what the transfer sent and what its acknowledgement, timeout or
+// settlement attached. CommitmentOK says whether the stored commitment is
+// the commitment of the stored packet.
+type Send struct {
+	Key               string `json:"key"`
+	Sequence          Seq    `json:"sequence"`
+	SourceClient      string `json:"source_client"`
+	DestinationClient string `json:"destination_client"`
+	// TimeoutTimestamp is the packet's timeout, unix seconds.
+	TimeoutTimestamp uint64 `json:"timeout_timestamp"`
+	CommitmentOK     bool   `json:"commitment_ok"`
+	Sender           string `json:"sender"`
+	Receiver         string `json:"receiver"`
+	Denom            string `json:"denom"`
+	Kind             string `json:"kind"`
+	Amount           Amount `json:"amount"`
+	Fee              Amount `json:"fee"`
+	SentHeight       int64  `json:"sent_height"`
+	SentAt           int64  `json:"sent_at"`
+	// Outcome: "" (pending), success, error (error acknowledgement), timeout.
+	Outcome         string `json:"outcome"`
+	ProcessedHeight int64  `json:"processed_height"`
+	ProcessedAt     int64  `json:"processed_at"`
+	// Payment of the refund an error or a timeout owes: "", paid, queued,
+	// claimed, rejected, reconciled.
+	Payment     string `json:"payment"`
+	Refunded    Amount `json:"refunded"`
+	Settlement  int64  `json:"settlement"`
+	Reservation Amount `json:"reservation"`
+	Proven      int64  `json:"proven"`
+	ProvenAt    uint64 `json:"proven_at"`
+	ProvenBy    string `json:"proven_by"`
+	ProvenGen   uint64 `json:"proven_gen"`
+	Incident    string `json:"incident"`
+}
+
+// Loss is an entry of the route's loss ledger (routes/<route>/losses).
+type Loss struct {
+	Key       string `json:"key"`
+	Direction string `json:"direction"`
+	Denom     string `json:"denom"`
+	Amount    Amount `json:"amount"`
+	Chain     string `json:"chain"`
+	Incident  string `json:"incident"`
+	Cause     string `json:"cause"`
 }
 
 // EthFlag is a standing flag on Ethereum (zero values: not standing).
@@ -124,11 +235,29 @@ type EthLimits struct {
 	RefundCap     Amount `json:"refund_cap"`
 	SendMax       Amount `json:"send_max"`
 	SendMin       Amount `json:"send_min"`
-	ReceiveLevel  Amount `json:"receive_level"`
-	RefundLevel   Amount `json:"refund_level"`
-	Reserved      Amount `json:"reserved"`
-	Losses        Amount `json:"losses"`
-	Deficit       Amount `json:"accepted_deficit"`
+	// ReceiveLevel and RefundLevel are leaky-bucket levels of what was
+	// USED: they drain at the cap per day (LeakyBucket.level), unlike a gno
+	// meter's level, which is what is still available. ReceiveAvailable
+	// and RefundAvailable are cap − level, floored at 0 (the contract's
+	// LeakyBucket.available), all at the pinned block's time.
+	ReceiveLevel     Amount `json:"receive_level"`
+	RefundLevel      Amount `json:"refund_level"`
+	ReceiveAvailable Amount `json:"receive_available"`
+	RefundAvailable  Amount `json:"refund_available"`
+	// Origin says which chain the token is native to: "ethereum" for an
+	// ERC20 escrowed on Ethereum (a minted denom on gno.land), "gno" for
+	// the GnoVoucher of a gno.land-native denom; "" when no gno route
+	// names the token. Decimals is the token's own decimals().
+	Origin   string `json:"origin,omitempty"`
+	Decimals *int   `json:"decimals,omitempty"`
+	// EscrowBalance is the route escrow's balance of an Ethereum-native
+	// token; VoucherSupply the totalSupply of a gno-native voucher. Exact,
+	// at the pinned block.
+	EscrowBalance *Amount `json:"escrow_balance,omitempty"`
+	VoucherSupply *Amount `json:"voucher_supply,omitempty"`
+	Reserved      Amount  `json:"reserved"`
+	Losses        Amount  `json:"losses"`
+	Deficit       Amount  `json:"accepted_deficit"`
 }
 
 // EthIncident is one entry of the transfer app's incidents(clientId).

@@ -58,9 +58,11 @@ func TestClients(t *testing.T) {
 	}
 	// The head time is the stored consensus timestamp; the expiry is on the
 	// slot clock, the realm's expired() rule: from the start of slot
-	// latest + window + 1 (genesis 1655733600, 12 s slots).
+	// latest + window + 1 (genesis 1672599988, 12 s slots: slot 10000000
+	// starts 12 s after the stored timestamp, as on Sepolia when the
+	// finalized header's timestamp precedes its slot).
 	wantHead := time.Unix(1792600000, 0).UTC()
-	wantExpiry := time.Unix(1655733600+(10000000+8*256*32+1)*12, 0).UTC()
+	wantExpiry := time.Unix(1672599988+(10000000+8*256*32+1)*12, 0).UTC()
 	if !eth.HeadTime.Equal(wantHead) || !eth.Expiry.Equal(wantExpiry) {
 		t.Fatalf("head %s expiry %s, want %s", eth.HeadTime, eth.Expiry, wantExpiry)
 	}
@@ -133,6 +135,35 @@ func TestRoutes(t *testing.T) {
 	}
 	if mint.Lock.String() != "0" {
 		t.Fatalf("mint lock %s", mint.Lock)
+	}
+	// The bridge meter's ceiling is the realm's DayCap: a minted denom's
+	// cap floor; an unescrowed one's max(cap floor, lock/10), here lock/10.
+	if mint.DayCap.Cmp(mint.CapFloor) != 0 || ugnot.DayCap.String() != "20000000000" || ugnot.CapFloor.String() != "10000000000" {
+		t.Fatalf("day caps: mint %s (floor %s), ugnot %s", mint.DayCap, mint.CapFloor, ugnot.DayCap)
+	}
+	// Display precision: the governed voucher decimals for a minted denom,
+	// the native precision for ugnot whose config says 0.
+	if mint.DisplayDecimals != 18 || ugnot.DisplayDecimals != 6 {
+		t.Fatalf("display decimals: mint %d, ugnot %d", mint.DisplayDecimals, ugnot.DisplayDecimals)
+	}
+	// The minted denom's voucher supply, exact past 2^64; none for ugnot.
+	if mint.Supply == nil || mint.Supply.String() != "18446744073709551617" || ugnot.Supply != nil {
+		t.Fatalf("supply: mint %v, ugnot %v", mint.Supply, ugnot.Supply)
+	}
+	// Every page of the records, the cursor followed.
+	if len(r.Claims) != 2 || r.Claims[0].State != "done" || r.Claims[1].Key != "ethereum-1/00000000000000000002" ||
+		r.Claims[1].Amount.String() != "18446744073709551616" || r.Claims[1].Reduced.String() != "7" || r.Claims[1].By != "vote" || r.Claims[1].At != 1792632312 {
+		t.Fatalf("claims %+v", r.Claims)
+	}
+	if len(r.Sweeps) != 2 || r.Sweeps[0].Reason != "refused recipient" || !r.Sweeps[0].FromClaim || r.Sweeps[0].ClaimPaid == nil ||
+		r.Sweeps[0].ClaimPaid.String() != "1000000" || !r.Sweeps[1].Voided || r.Sweeps[1].ClaimPaid != nil {
+		t.Fatalf("sweeps %+v", r.Sweeps)
+	}
+	if len(r.Losses) != 1 || r.Losses[0].Amount.String() != "42" || r.Losses[0].Direction != "in" || r.Losses[0].Cause != "forged receive" {
+		t.Fatalf("losses %+v", r.Losses)
+	}
+	if len(r.Sends) != 3 || r.Sends[0].Sequence != 1 || r.Sends[0].Amount.String() != "2000000000" || !r.Sends[0].CommitmentOK || r.Sends[2].CommitmentOK {
+		t.Fatalf("sends %+v", r.Sends)
 	}
 	// Totals are decimal strings on chain, exact past int64 (ADR 0005): 2^64.
 	if mint.Totals.InFlight.String() != "18446744073709551616" || mint.Totals.Lost.String() != "18446744073709551616" {

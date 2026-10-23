@@ -1,10 +1,12 @@
 package gnoviews
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -153,11 +155,18 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 				return r, err
 			}
 			d.Lock = &lock
+			d.DayCap = dayCap(d.Kind, d.CapFloor, lock)
+			d.DisplayDecimals = NativeDecimals[d.Denom]
 		case "mint":
 			token, trace, err := v.denomTrace(ctx, d.Denom, routeClients, p)
 			switch {
 			case err == nil:
 				d.Token, d.Trace = token, trace
+				supply, err := v.voucherSupply(ctx, d.Denom, p)
+				if err != nil {
+					return r, fmt.Errorf("route %s denom %s: %w", rj.Route, dj.Denom, err)
+				}
+				d.Supply = &supply
 			case isNotFound(err) && v.noVoucher(ctx, d.Denom, p):
 				// Configured but never received: the realm records the
 				// trace and creates the voucher on the first receive, so
@@ -168,13 +177,225 @@ func (v *Views) route(ctx context.Context, rj routeJSON, p Pin) (model.Route, er
 			}
 			zero := model.AmountFromInt64(0)
 			d.Lock = &zero
+			d.DayCap = dayCap(d.Kind, d.CapFloor, zero)
+			d.DisplayDecimals = d.Decimals
 		}
 		r.Denoms = append(r.Denoms, d)
 	}
 	if r.Denoms == nil {
 		r.Denoms = []model.Denom{}
 	}
+	if err := v.records(ctx, &r, p); err != nil {
+		return r, err
+	}
 	return r, nil
+}
+
+// NativeDecimals is the display precision of the gno.land-native denoms a
+// route can unescrow: ugnot is a millionth of a GNOT. An unescrowed denom's
+// config carries decimals 0 (it has no voucher on gno.land), so the
+// precision comes from here; a denom missing from it is shown in base units.
+var NativeDecimals = map[string]int{"ugnot": 6}
+
+// dayCap is the realm's Denom.DayCap(lock): the bridge meter's ceiling and
+// daily refill. A minted denom's is its cap floor; an unescrowed one's is
+// max(cap floor, lock/10), lock being the route's escrow of the denom.
+func dayCap(kind string, capFloor, lock model.Amount) model.Amount {
+	if kind == "mint" {
+		return capFloor
+	}
+	c := model.NewAmount(new(big.Int).Quo(lock.Int(), big.NewInt(10)))
+	if c.Cmp(capFloor) < 0 {
+		return capFloor
+	}
+	return c
+}
+
+// voucherJSON is voucher/<denom>: the gno voucher token's metadata with its
+// exact supply (a decimal string).
+type voucherJSON struct {
+	Denom       string      `json:"denom"`
+	Decimals    json.Number `json:"decimals"`
+	TotalSupply json.Number `json:"total_supply"`
+}
+
+// voucherSupply reads a minted denom's voucher supply.
+func (v *Views) voucherSupply(ctx context.Context, denom string, p Pin) (model.Amount, error) {
+	var vj voucherJSON
+	if err := v.renderJSON(ctx, v.paths.Transfer, "voucher/"+denom, p, &vj); err != nil {
+		return model.Amount{}, err
+	}
+	if vj.Denom != denom {
+		return model.Amount{}, fmt.Errorf("voucher answers %q for %q", vj.Denom, denom)
+	}
+	if vj.TotalSupply == "" {
+		return model.Amount{}, fmt.Errorf("voucher %s: no total_supply", denom)
+	}
+	return amount(vj.TotalSupply)
+}
+
+// records reads every page of the route's claims, sweeps, sends and losses.
+func (v *Views) records(ctx context.Context, r *model.Route, p Pin) error {
+	r.Claims, r.Sweeps, r.Sends, r.Losses = []model.Claim{}, []model.Sweep{}, []model.Send{}, []model.Loss{}
+	if err := v.walk(ctx, r.Key, "claims", p, func(raw json.RawMessage) error {
+		c, err := parseClaim(raw)
+		r.Claims = append(r.Claims, c)
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := v.walk(ctx, r.Key, "sweeps", p, func(raw json.RawMessage) error {
+		s, err := parseSweep(raw)
+		r.Sweeps = append(r.Sweeps, s)
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := v.walk(ctx, r.Key, "losses", p, func(raw json.RawMessage) error {
+		l, err := parseLoss(raw)
+		r.Losses = append(r.Losses, l)
+		return err
+	}); err != nil {
+		return err
+	}
+	sends, err := v.Sends(ctx, r.Key, p)
+	if err != nil {
+		return err
+	}
+	for _, rec := range sends {
+		r.Sends = append(r.Sends, rec.Model())
+	}
+	return nil
+}
+
+// walk calls fn on every entry of every page of routes/<route>/<kind>.
+func (v *Views) walk(ctx context.Context, route, kind string, p Pin, fn func(json.RawMessage) error) error {
+	cursor := ""
+	for {
+		pg, err := v.RoutePage(ctx, route, kind, cursor, p)
+		if err != nil {
+			return err
+		}
+		for _, e := range pg.Entries {
+			if err := fn(e); err != nil {
+				return fmt.Errorf("route %s %s entry: %w", route, kind, err)
+			}
+		}
+		if pg.Next == "" || len(pg.Entries) == 0 {
+			return nil
+		}
+		cursor = pg.Next
+	}
+}
+
+type claimJSON struct {
+	Key     string      `json:"key"`
+	Denom   string      `json:"denom"`
+	To      string      `json:"to"`
+	Amount  json.Number `json:"amount"`
+	Paid    json.Number `json:"paid"`
+	Reduced json.Number `json:"reduced"`
+	Fee     json.Number `json:"fee"`
+	State   string      `json:"state"`
+	By      string      `json:"by"`
+	At      json.Number `json:"at"`
+	Height  json.Number `json:"height"`
+	Seq     json.Number `json:"seq"`
+}
+
+func parseClaim(raw json.RawMessage) (model.Claim, error) {
+	var cj claimJSON
+	if err := decodeNumbers(raw, &cj); err != nil {
+		return model.Claim{}, err
+	}
+	c := model.Claim{Key: cj.Key, Denom: cj.Denom, To: cj.To, State: cj.State, By: cj.By}
+	var err error
+	for _, f := range []struct {
+		dst *model.Amount
+		src json.Number
+	}{{&c.Amount, cj.Amount}, {&c.Paid, cj.Paid}, {&c.Reduced, cj.Reduced}, {&c.Fee, cj.Fee}} {
+		if *f.dst, err = amount(f.src); err != nil {
+			return c, err
+		}
+	}
+	for _, f := range []struct {
+		dst *int64
+		src json.Number
+	}{{&c.At, cj.At}, {&c.Height, cj.Height}, {&c.Seq, cj.Seq}} {
+		if *f.dst, err = num(f.src); err != nil {
+			return c, err
+		}
+	}
+	return c, nil
+}
+
+type sweepJSON struct {
+	Key       string      `json:"key"`
+	Denom     string      `json:"denom"`
+	To        string      `json:"to"`
+	Amount    json.Number `json:"amount"`
+	Reduced   json.Number `json:"reduced"`
+	Reason    string      `json:"reason"`
+	Height    json.Number `json:"height"`
+	Voided    bool        `json:"voided"`
+	Paid      bool        `json:"paid"`
+	PaidTo    string      `json:"paid_to"`
+	FromClaim bool        `json:"from_claim"`
+	ClaimPaid json.Number `json:"claim_paid"`
+}
+
+func parseSweep(raw json.RawMessage) (model.Sweep, error) {
+	var sj sweepJSON
+	if err := decodeNumbers(raw, &sj); err != nil {
+		return model.Sweep{}, err
+	}
+	s := model.Sweep{Key: sj.Key, Denom: sj.Denom, To: sj.To, Reason: sj.Reason, Voided: sj.Voided, Paid: sj.Paid, PaidTo: sj.PaidTo, FromClaim: sj.FromClaim}
+	var err error
+	if s.Amount, err = amount(sj.Amount); err != nil {
+		return s, err
+	}
+	if s.Reduced, err = amount(sj.Reduced); err != nil {
+		return s, err
+	}
+	if s.Height, err = num(sj.Height); err != nil {
+		return s, err
+	}
+	if sj.FromClaim {
+		cp, err := amount(sj.ClaimPaid)
+		if err != nil {
+			return s, err
+		}
+		s.ClaimPaid = &cp
+	}
+	return s, nil
+}
+
+type lossJSON struct {
+	Key       string      `json:"key"`
+	Direction string      `json:"direction"`
+	Denom     string      `json:"denom"`
+	Amount    json.Number `json:"amount"`
+	Chain     string      `json:"chain"`
+	Incident  string      `json:"incident"`
+	Cause     string      `json:"cause"`
+}
+
+func parseLoss(raw json.RawMessage) (model.Loss, error) {
+	var lj lossJSON
+	if err := decodeNumbers(raw, &lj); err != nil {
+		return model.Loss{}, err
+	}
+	l := model.Loss{Key: lj.Key, Direction: lj.Direction, Denom: lj.Denom, Chain: lj.Chain, Incident: lj.Incident, Cause: lj.Cause}
+	var err error
+	l.Amount, err = amount(lj.Amount)
+	return l, err
+}
+
+// decodeNumbers decodes raw into out with numbers kept as tokens.
+func decodeNumbers(raw json.RawMessage, out any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	return dec.Decode(out)
 }
 
 func nonNil(s []string) []string {
@@ -480,6 +701,20 @@ func parseSend(raw json.RawMessage) (SendRecord, error) {
 		return rec, err
 	}
 	return rec, nil
+}
+
+// Model is the record as the API serves it: the packet's identity and the
+// commitment check, without the payload bytes.
+func (rec SendRecord) Model() model.Send {
+	return model.Send{
+		Key: rec.Key, Sequence: model.Seq(rec.Packet.Sequence), SourceClient: rec.Packet.SourceClient,
+		DestinationClient: rec.Packet.DestinationClient, TimeoutTimestamp: rec.Packet.TimeoutTimestamp,
+		CommitmentOK: rec.CommitmentOK, Sender: rec.Sender, Receiver: rec.Receiver, Denom: rec.Denom, Kind: rec.Kind,
+		Amount: rec.Amount, Fee: rec.Fee, SentHeight: rec.SentHeight, SentAt: rec.SentAt, Outcome: rec.Outcome,
+		ProcessedHeight: rec.Processed, ProcessedAt: rec.ProcessedAt, Payment: rec.Payment, Refunded: rec.Refunded,
+		Settlement: rec.Settlement, Reservation: rec.Reservation, Proven: rec.Proven, ProvenAt: rec.ProvenAt,
+		ProvenBy: rec.ProvenBy, ProvenGen: rec.ProvenGen, Incident: rec.Incident,
+	}
 }
 
 // Sends walks every page of a route's send records.
