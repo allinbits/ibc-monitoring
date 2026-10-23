@@ -228,6 +228,10 @@ func TestEngineEndToEnd(t *testing.T) {
 	if ethRoute.CurrentClient != "client-0" || ethRoute.Provenance.Verification != model.VerificationCrossChecked {
 		t.Fatalf("eth route %+v", ethRoute)
 	}
+	// The gno discovery's provenance names its provider and read time.
+	if gp := ethRoute.GnoProvenance; gp == nil || gp.Node == "" || gp.ReadAt.IsZero() || gp.Finality != "committed" {
+		t.Fatalf("gno provenance %+v", ethRoute.GnoProvenance)
+	}
 	// Each token's origin follows its gno denom's kind: ugnot's voucher is
 	// gno-native (a supply), the minted denom's ERC20 Ethereum-native (an
 	// escrow balance).

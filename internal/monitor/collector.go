@@ -140,6 +140,17 @@ type GnoDiscovery struct {
 	Verified   model.Verification      `json:"verification"`
 	Clients    map[string]model.Client `json:"clients"`
 	Routes     []model.Route           `json:"routes"`
+	// Node and ReadAt are the provider the discovery was read from and
+	// when its last view was read.
+	Node   string    `json:"node"`
+	ReadAt time.Time `json:"read_at"`
+}
+
+// Provenance is the provenance of a value taken from the discovery: its
+// pin, provider, read time and verification.
+func (d GnoDiscovery) Provenance() model.Provenance {
+	return model.Provenance{Chain: model.ChainGno, Height: uint64(d.Pin.Height), BlockHash: d.Pin.BlockHash, Node: d.Node, ReadAt: d.ReadAt,
+		Verification: d.Verified, Finality: "committed", StateVerification: model.StateNone, Collection: d.Collection}
 }
 
 // ChainState is one chain's collection readiness (docs/design.md §7.11).
@@ -507,6 +518,7 @@ func (c *Collector) collectGno(ctx context.Context, pins *Pins, collection uint6
 	stamp(&gov.Provenance)
 	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoGovernance, Key: "ibcgov", Value: gov, Provenance: gov.Provenance})
 	disc.Verified = pins.GnoVerified
+	disc.Node, disc.ReadAt = gov.Provenance.Node, gov.Provenance.ReadAt
 	bundle = append(bundle, store.Snapshot{Kind: store.KindGnoDiscovery, Key: "latest", Value: disc, Provenance: model.Provenance{Chain: model.ChainGno, Height: uint64(pin.Height), Collection: collection, Verification: pins.GnoVerified}})
 	c.Store.PutSnapshots(bundle)
 	return stale, nil
@@ -668,7 +680,7 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 		missingInputs = append(missingInputs, missing+": the route's tokens and gno relationship are unknown")
 	default:
 		er.GnoDiscovery = disc.Collection
-		gp := model.Provenance{Chain: model.ChainGno, Height: uint64(disc.Pin.Height), BlockHash: disc.Pin.BlockHash, Collection: disc.Collection, Verification: disc.Verified}
+		gp := disc.Provenance()
 		er.GnoProvenance = &gp
 		if r, cp, found := matchGnoRoute(disc, d); found {
 			er.GnoRoute, er.GnoCounterparty = r.Key, cp

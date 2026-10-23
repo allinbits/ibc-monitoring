@@ -55,7 +55,7 @@ func (c RouteRelationship) Run(_ context.Context, st store.Store, now time.Time)
 				d.Retired = append(d.Retired, m.Old)
 			}
 		}
-		gp := model.Provenance{Chain: model.ChainGno, Height: uint64(disc.Pin.Height), BlockHash: disc.Pin.BlockHash, Collection: disc.Collection, Verification: disc.Verified}
+		gp := disc.Provenance()
 		f := model.Finding{Subject: subject, Severity: model.SeverityInfo, Provenance: []model.Provenance{s.Provenance, gp}, Values: map[string]string{
 			"current_client": er.CurrentClient,
 			"gno_discovery":  fmt.Sprintf("%d", disc.Collection),
