@@ -56,9 +56,13 @@ func TestClients(t *testing.T) {
 	if eth.TrustingPeriod != wantTP {
 		t.Fatalf("trusting period %s, want %s", eth.TrustingPeriod, wantTP)
 	}
+	// The head time is the stored consensus timestamp; the expiry is on the
+	// slot clock, the realm's expired() rule: from the start of slot
+	// latest + window + 1 (genesis 1655733600, 12 s slots).
 	wantHead := time.Unix(1792600000, 0).UTC()
-	if !eth.HeadTime.Equal(wantHead) || !eth.Expiry.Equal(wantHead.Add(wantTP)) {
-		t.Fatalf("head %s expiry %s", eth.HeadTime, eth.Expiry)
+	wantExpiry := time.Unix(1655733600+(10000000+8*256*32+1)*12, 0).UTC()
+	if !eth.HeadTime.Equal(wantHead) || !eth.Expiry.Equal(wantExpiry) {
+		t.Fatalf("head %s expiry %s, want %s", eth.HeadTime, eth.Expiry, wantExpiry)
 	}
 	if eth.Provenance.Height != 4200 || eth.Provenance.Chain != model.ChainGno || eth.Provenance.Node != "fixture" {
 		t.Fatalf("provenance %+v", eth.Provenance)
@@ -337,7 +341,9 @@ func TestExpiryWithNonZeroGenesisSlot(t *testing.T) {
 		if !c.HeadTime.Equal(want) {
 			t.Fatalf("head time %s, want %s (slot %d, genesis slot 1000)", c.HeadTime, want, c.LatestHeight)
 		}
-		if !c.Expiry.Equal(want.Add(c.TrustingPeriod)) {
+		// Expired once the current slot passes latest + window: from the
+		// start of the slot after that, one slot past head + window.
+		if !c.Expiry.Equal(want.Add(c.TrustingPeriod + time.Duration(atoi("seconds_per_slot"))*time.Second)) {
 			t.Fatalf("expiry %s", c.Expiry)
 		}
 		return

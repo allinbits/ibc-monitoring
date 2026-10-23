@@ -181,24 +181,34 @@ func (v *Views) fillEthereum(c *model.Client, cj clientJSON) error {
 	if err != nil {
 		return err
 	}
-	// Expired when currentSlot > latestSlot + 8 periods; expressed as a time.
 	periodSlots := TrustingPeriods * epochsPerPeriod * slotsPerEpoch
 	c.TrustingPeriod = time.Duration(periodSlots*secondsPerSlot) * time.Second
 	if secondsPerSlot > 0 && c.LatestHeight >= genesisSlot {
 		headUnix := genesisTime + (c.LatestHeight-genesisSlot)*secondsPerSlot
 		c.HeadTime = time.Unix(int64(headUnix), 0).UTC()
-		c.Expiry = c.HeadTime.Add(c.TrustingPeriod)
+		c.Expiry = ethExpiry(genesisTime, genesisSlot, secondsPerSlot, c.LatestHeight, periodSlots)
 	}
+	// The head time shown is the stored consensus state's timestamp; the
+	// expiry stays on the slot clock, which is what the client judges by.
 	if len(cj.LastConsensusState) > 0 {
 		var ccs ethConsensusState
 		if err := json.Unmarshal(cj.LastConsensusState, &ccs); err == nil && ccs.Timestamp != "" {
 			if ts, err := num(ccs.Timestamp); err == nil && ts > 0 {
 				c.HeadTime = time.Unix(ts, 0).UTC()
-				c.Expiry = c.HeadTime.Add(c.TrustingPeriod)
 			}
 		}
 	}
 	return nil
+}
+
+// ethExpiry is the first time at which the gno Ethereum client reports
+// Expired: its expired() holds once currentSlot > latestSlot + window, with
+// currentSlot = (now − genesisTime)/secondsPerSlot + genesisSlot, i.e. from
+// the start of slot latestSlot + window + 1. It is a time on the slot clock,
+// not the stored consensus timestamp plus the window: the two differ
+// whenever the timestamp is not the latest slot's own start.
+func ethExpiry(genesisTime, genesisSlot, secondsPerSlot, latestSlot, windowSlots uint64) time.Time {
+	return time.Unix(int64(genesisTime+(latestSlot-genesisSlot+windowSlots+1)*secondsPerSlot), 0).UTC()
 }
 
 func (v *Views) fillTendermint(c *model.Client, cj clientJSON) error {
