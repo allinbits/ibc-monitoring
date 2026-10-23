@@ -110,9 +110,27 @@ func (v *Views) Discover(ctx context.Context, clientID string, b ethrpc.Block) (
 	return d, nil
 }
 
+// Token origins: the chain a route's token is native to.
+const (
+	// OriginEthereum is an ERC20 escrowed on Ethereum (a minted denom on
+	// gno.land).
+	OriginEthereum = "ethereum"
+	// OriginGno is the GnoVoucher of a gno.land-native (unescrowed) denom.
+	OriginGno = "gno"
+)
+
+// RouteToken is a token to read the route's limits for, with its origin
+// ("" when unknown: then neither its escrow balance nor its supply is read).
+type RouteToken struct {
+	Address common.Address
+	Origin  string
+}
+
 // Route reads the Ethereum side of a discovered route; tokens are the
-// ERC20s to read limits for (the gno denoms' resolved tokens).
-func (v *Views) Route(ctx context.Context, d RouteDiscovery, tokens []common.Address, b ethrpc.Block) (model.EthRoute, error) {
+// ERC20s to read limits for (the gno denoms' resolved tokens), and for each
+// its decimals and, by origin, the route escrow's balance of it or its
+// voucher supply.
+func (v *Views) Route(ctx context.Context, d RouteDiscovery, tokens []RouteToken, b ethrpc.Block) (model.EthRoute, error) {
 	x := v.addrs.Transfer
 	clientID, retired := d.CurrentClient, d.Retired
 	r := model.EthRoute{RouteKey: d.RouteKey, CurrentClient: clientID, Migrations: d.Migrations, Provenance: v.provenance(b), RouteFlags: []model.EthFlag{}, RefundsFlags: []model.EthFlag{}, Limits: []model.EthLimits{}, Incidents: []model.EthIncident{}, Recon: []model.EthClientRecon{}}
@@ -179,8 +197,11 @@ func (v *Views) Route(ctx context.Context, d RouteDiscovery, tokens []common.Add
 		r.QuarantineEnd = qe.Uint64()
 	}
 	for _, t := range tokens {
-		l, err := v.Limits(ctx, clientID, t, b)
+		l, err := v.Limits(ctx, clientID, t.Address, b)
 		if err != nil {
+			return r, err
+		}
+		if err := v.tokenState(ctx, &l, t, escrow, b); err != nil {
 			return r, err
 		}
 		r.Limits = append(r.Limits, l)
@@ -232,6 +253,8 @@ func (v *Views) Limits(ctx context.Context, clientID string, token common.Addres
 	l.SendMin = model.NewAmount(lv.Limits.SendMin)
 	l.ReceiveLevel = model.NewAmount(lv.ReceiveLevel)
 	l.RefundLevel = model.NewAmount(lv.RefundLevel)
+	l.ReceiveAvailable = available(l.DayCap, l.ReceiveLevel)
+	l.RefundAvailable = available(l.RefundCap, l.RefundLevel)
 	for _, f := range []struct {
 		dst    *model.Amount
 		method string
@@ -243,6 +266,41 @@ func (v *Views) Limits(ctx context.Context, clientID string, token common.Addres
 		*f.dst = model.NewAmount(val)
 	}
 	return l, nil
+}
+
+// available is LeakyBucket.available: what can still be charged under cap
+// at a level of what was used, floored at 0.
+func available(capAmt, level model.Amount) model.Amount {
+	if level.Cmp(capAmt) >= 0 {
+		return model.AmountFromInt64(0)
+	}
+	return capAmt.Sub(level)
+}
+
+// tokenState reads a route token's decimals and, by its origin, the route
+// escrow's balance of an Ethereum-native token or a gno voucher's supply.
+// decimals() is optional in ERC20: a token without it leaves Decimals nil.
+func (v *Views) tokenState(ctx context.Context, l *model.EthLimits, t RouteToken, escrow common.Address, b ethrpc.Block) error {
+	l.Origin = t.Origin
+	if dec, err := one[uint8](ctx, v, t.Address, v.erc20, "decimals", b); err == nil {
+		d := int(dec)
+		l.Decimals = &d
+	}
+	switch t.Origin {
+	case OriginEthereum:
+		bal, err := v.BalanceOf(ctx, t.Address, escrow, b)
+		if err != nil {
+			return fmt.Errorf("escrow balance of %s: %w", t.Address.Hex(), err)
+		}
+		l.EscrowBalance = &bal
+	case OriginGno:
+		supply, err := v.VoucherSupply(ctx, t.Address, b)
+		if err != nil {
+			return fmt.Errorf("voucher supply of %s: %w", t.Address.Hex(), err)
+		}
+		l.VoucherSupply = &supply
+	}
+	return nil
 }
 
 // ClientRecon reads clientRecon(clientId) and isRetired(clientId).

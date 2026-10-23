@@ -661,7 +661,7 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 	}
 	disc, missing := c.usableDiscovery()
 	var missingInputs []string
-	var tokens []common.Address
+	var tokens []ethviews.RouteToken
 	var er model.EthRoute
 	switch {
 	case missing != "":
@@ -681,7 +681,14 @@ func (c *Collector) collectEth(ctx context.Context, pins *Pins, collection uint6
 				a := common.HexToAddress(dn.Token)
 				if !seen[a] {
 					seen[a] = true
-					tokens = append(tokens, a)
+					origin := ""
+					switch dn.Kind {
+					case "mint":
+						origin = ethviews.OriginEthereum
+					case "unescrow":
+						origin = ethviews.OriginGno
+					}
+					tokens = append(tokens, ethviews.RouteToken{Address: a, Origin: origin})
 				}
 			}
 		} else {

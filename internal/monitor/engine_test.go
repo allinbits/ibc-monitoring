@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -144,6 +145,14 @@ func ethFixture(t *testing.T, head time.Time) (*ethviews.Views, *ethrpc.Client, 
 	for _, m := range []string{"reserved", "losses", "acceptedDeficit"} {
 		srv.Returns(xfer, m, big.NewInt(0))
 	}
+	// The gno fixture's tokens: ugnot's voucher and the minted denom's ERC20.
+	for _, tok := range []string{"0x4ed7c70f96b99c776995fb64377f0d4ab3b0e1c1", "0xdac17f958d2ee523a2206206994597c13d831ec7"} {
+		a := common.HexToAddress(tok)
+		srv.Contract(a, abi.MustLoad(abi.Voucher), []byte{1})
+		srv.Returns(a, "decimals", uint8(6))
+		srv.Returns(a, "totalSupply", big.NewInt(0))
+		srv.Returns(a, "balanceOf", big.NewInt(0))
+	}
 	srv.Returns(xfer, "incidents", []struct {
 		Kind        uint8
 		Status      uint8
@@ -218,6 +227,19 @@ func TestEngineEndToEnd(t *testing.T) {
 	ethRoute := st.Snapshots(store.KindEthRoutes)[0].Value.(model.EthRoute)
 	if ethRoute.CurrentClient != "client-0" || ethRoute.Provenance.Verification != model.VerificationCrossChecked {
 		t.Fatalf("eth route %+v", ethRoute)
+	}
+	// Each token's origin follows its gno denom's kind: ugnot's voucher is
+	// gno-native (a supply), the minted denom's ERC20 Ethereum-native (an
+	// escrow balance).
+	origins := map[string]string{}
+	for _, l := range ethRoute.Limits {
+		origins[strings.ToLower(l.Token)] = l.Origin
+		if (l.Origin == ethviews.OriginGno) != (l.VoucherSupply != nil) || (l.Origin == ethviews.OriginEthereum) != (l.EscrowBalance != nil) {
+			t.Fatalf("token state %+v", l)
+		}
+	}
+	if origins["0x4ed7c70f96b99c776995fb64377f0d4ab3b0e1c1"] != ethviews.OriginGno || origins["0xdac17f958d2ee523a2206206994597c13d831ec7"] != ethviews.OriginEthereum {
+		t.Fatalf("origins %v", origins)
 	}
 	alarms := st.Alarms(false)
 	keys := map[string]model.Severity{}

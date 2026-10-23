@@ -21,6 +21,7 @@ var (
 	lcAddr     = common.HexToAddress("0x000000000000000000000000000000000000cccc")
 	routerAddr = common.HexToAddress("0x000000000000000000000000000000000000eeee")
 	tokenAddr  = common.HexToAddress("0x000000000000000000000000000000000000dddd")
+	nativeAddr = common.HexToAddress("0x000000000000000000000000000000000000dede")
 	guardian0  = common.HexToAddress("0x0000000000000000000000000000000000000001")
 	guardian1  = common.HexToAddress("0x0000000000000000000000000000000000000002")
 	watch0     = common.HexToAddress("0x0000000000000000000000000000000000000005")
@@ -108,6 +109,21 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 	srv.Returns(xferAddr, "reserved", big.NewInt(10))
 	srv.Returns(xferAddr, "losses", big.NewInt(20))
 	srv.Returns(xferAddr, "acceptedDeficit", big.NewInt(5))
+	// tokenAddr is a gno voucher (6 decimals); nativeAddr an Ethereum ERC20
+	// held by the route escrow 0x5e5e, exact past 2^64.
+	voucher := abi.MustLoad(abi.Voucher)
+	srv.Contract(tokenAddr, voucher, []byte{0x60, 0x80})
+	srv.Returns(tokenAddr, "decimals", uint8(6))
+	srv.Returns(tokenAddr, "totalSupply", big.NewInt(25_000_000))
+	srv.Contract(nativeAddr, voucher, []byte{0x60, 0x80})
+	srv.Returns(nativeAddr, "decimals", uint8(18))
+	srv.On(nativeAddr, "balanceOf", func(args []any) ([]any, error) {
+		if args[0].(common.Address) != common.HexToAddress("0x5e5e") {
+			return []any{big.NewInt(0)}, nil
+		}
+		v, _ := new(big.Int).SetString("60000000000000000000", 10)
+		return []any{v}, nil
+	})
 	srv.Returns(xferAddr, "incidents", []incident{{Kind: 1, Status: 1, Client: [32]byte{0x9}, SuspectFrom: 8_000_000}}, uint64(0), uint64(1))
 	srv.On(xferAddr, "clientRecon", func(args []any) ([]any, error) {
 		if args[0].(string) == "client-old" {
@@ -222,7 +238,7 @@ func TestRoute(t *testing.T) {
 		t.Fatalf("discovery: %+v", d)
 	}
 	d.Retired = []string{"client-old"}
-	r, err := v.Route(context.Background(), d, []common.Address{tokenAddr}, b)
+	r, err := v.Route(context.Background(), d, []RouteToken{{Address: tokenAddr, Origin: OriginGno}, {Address: nativeAddr, Origin: OriginEthereum}}, b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +254,21 @@ func TestRoute(t *testing.T) {
 	if r.QuarantineSecs != 7*86400 || r.QuarantineEnd != 1777000000 {
 		t.Fatalf("quarantine: %+v", r)
 	}
-	if len(r.Limits) != 1 || !r.Limits[0].Set || r.Limits[0].DayCap.String() != "100000000000" || r.Limits[0].ReceiveLevel.String() != "123" || r.Limits[0].Losses.String() != "20" || r.Limits[0].Deficit.String() != "5" {
+	if len(r.Limits) != 2 || !r.Limits[0].Set || r.Limits[0].DayCap.String() != "100000000000" || r.Limits[0].ReceiveLevel.String() != "123" || r.Limits[0].Losses.String() != "20" || r.Limits[0].Deficit.String() != "5" {
 		t.Fatalf("limits: %+v", r.Limits)
+	}
+	// Ethereum's levels are what was used: available is cap − level.
+	if r.Limits[0].ReceiveAvailable.String() != "99999999877" || r.Limits[0].RefundAvailable.String() != "99999999544" {
+		t.Fatalf("available: %+v", r.Limits[0])
+	}
+	// A gno voucher: its supply, no escrow balance; an Ethereum token: the
+	// route escrow's balance, no supply. Each with its own decimals.
+	vt, nt := r.Limits[0], r.Limits[1]
+	if vt.Origin != OriginGno || vt.Decimals == nil || *vt.Decimals != 6 || vt.VoucherSupply == nil || vt.VoucherSupply.String() != "25000000" || vt.EscrowBalance != nil {
+		t.Fatalf("voucher token: %+v", vt)
+	}
+	if nt.Origin != OriginEthereum || nt.Decimals == nil || *nt.Decimals != 18 || nt.EscrowBalance == nil || nt.EscrowBalance.String() != "60000000000000000000" || nt.VoucherSupply != nil {
+		t.Fatalf("native token: %+v", nt)
 	}
 	if len(r.Incidents) != 1 || r.Incidents[0].Kind != 1 || r.Incidents[0].SuspectFrom != 8_000_000 || r.PendingIncident != 1 {
 		t.Fatalf("incidents: %+v", r.Incidents)
@@ -254,6 +283,12 @@ func TestRoute(t *testing.T) {
 	amt, refunded := rec.Amounts()
 	if rec.Outcome != 1 || amt.String() != "1000" || refunded.String() != "0" || rec.Token != tokenAddr {
 		t.Fatalf("send record: %+v", rec)
+	}
+}
+
+func TestAvailableFloorsAtZero(t *testing.T) {
+	if a := available(model.AmountFromInt64(5), model.AmountFromInt64(7)); !a.IsZero() {
+		t.Fatalf("available over a level above the cap: %s", a)
 	}
 }
 
