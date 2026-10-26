@@ -43,6 +43,7 @@ import {
   type Broadcast,
 } from "./wallets";
 import { paramOptions, validateParam, type Values } from "./validation";
+import { actionAvailability, detectRequirement, type ActionAvailability } from "./availability";
 
 function useNow(live?: LiveState): number {
   const [tick, setTick] = useState(Date.now());
@@ -179,6 +180,7 @@ function ActionDetails({ action }: { action: Action }) {
           expected refusals.
         </p>
       )}
+      {action.verified && <p className="muted small">{action.verified}</p>}
       <p className="notice small">
         <Label term="governance timing">Timing</Label>: {actionTiming(action)}
       </p>
@@ -263,6 +265,7 @@ function ActionForm({
   live,
   roles,
   ethereum,
+  availability,
   busy,
   onBusy,
   onResult,
@@ -273,6 +276,7 @@ function ActionForm({
   live: LiveState;
   roles: RoleState;
   ethereum?: EthRoute;
+  availability: ActionAvailability;
   busy: boolean;
   onBusy: (busy: boolean) => void;
   onResult: (result: Result) => void;
@@ -290,7 +294,7 @@ function ActionForm({
   const [confirmYield, setConfirmYield] = useState(false);
   const cancel = useRef<AbortController>();
   useEffect(() => () => cancel.current?.abort(), []);
-  const limitation = browserLimitation(action);
+  const limitation = availability.disabled ?? browserLimitation(action);
   const ctx = { ...live, roles: roles.roles };
   function change(name: string, value: string) {
     setPreview(undefined);
@@ -386,6 +390,11 @@ function ActionForm({
         <Help term={`governance action ${action.id}`} />
       </div>
       <ActionDetails action={action} />
+      {availability.warning && (
+        <p className="notice" role="status">
+          {availability.warning}
+        </p>
+      )}
       {limitation ? (
         <div className="notice">{limitation}</div>
       ) : (
@@ -643,6 +652,22 @@ export function GovernanceActions() {
     retry: 1,
   });
   const live = liveQ.data;
+  const governanceQ = useQuery({ queryKey: ["governance"], queryFn: api.governance });
+  const recovery = governanceQ.data?.ethereum?.recovery;
+  const requirementsQ = useQuery({
+    queryKey: ["governance-requirements"],
+    queryFn: async () =>
+      Object.fromEntries(
+        await Promise.all(
+          actions
+            .filter((a) => a.requires)
+            .map(async (a) => [a.id, await detectRequirement(a)] as const),
+        ),
+      ),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchInterval: false,
+  });
   const rolesQ = useQuery({
     queryKey: ["governance-roles", address, live?.yielded, live?.govdaoGoverns],
     queryFn: () => readRoles(address, live!),
@@ -848,27 +873,40 @@ export function GovernanceActions() {
                       <summary>
                         {category} <span className="muted">{group.length}</span>
                       </summary>
-                      {group.map((a) => (
-                        <div
-                          className={`catalog-action ${selection?.action.id === a.id ? "selected" : ""}`}
-                          key={a.id}
-                        >
-                          <button
-                            type="button"
-                            disabled={busy}
-                            aria-pressed={selection?.action.id === a.id}
-                            onClick={() => select(a.id)}
+                      {group.map((a) => {
+                        const availability = actionAvailability(
+                          a,
+                          requirementsQ.data?.[a.id],
+                          recovery,
+                        );
+                        return (
+                          <div
+                            className={`catalog-action ${selection?.action.id === a.id ? "selected" : ""}`}
+                            key={a.id}
                           >
-                            {a.title}
-                          </button>
-                          <Help term={`governance action ${a.id}`} />
-                          <p className="small muted">{a.description}</p>
-                          <span className="small muted">
-                            {a.timing.gno === "queued" ? "3,600 s + Execute" : a.timing.gno}
-                            {browserLimitation(a) ? " · tooling / builder selection" : ""}
-                          </span>
-                        </div>
-                      ))}
+                            <button
+                              type="button"
+                              disabled={busy || !!availability.disabled}
+                              aria-pressed={selection?.action.id === a.id}
+                              onClick={() => select(a.id)}
+                            >
+                              {a.title}
+                            </button>
+                            <Help term={`governance action ${a.id}`} />
+                            <p className="small muted">{a.description}</p>
+                            {availability.disabled && (
+                              <p className="small muted">{availability.disabled}</p>
+                            )}
+                            {availability.warning && (
+                              <p className="notice small">{availability.warning}</p>
+                            )}
+                            <span className="small muted">
+                              {a.timing.gno === "queued" ? "3,600 s + Execute" : a.timing.gno}
+                              {browserLimitation(a) ? " · tooling / builder selection" : ""}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </details>
                   )
                 );
@@ -884,6 +922,11 @@ export function GovernanceActions() {
                   live={live}
                   roles={roles}
                   ethereum={ethereum}
+                  availability={actionAvailability(
+                    selection.action,
+                    requirementsQ.data?.[selection.action.id],
+                    recovery,
+                  )}
                   busy={busy}
                   onBusy={setBusy}
                   onResult={setResult}
@@ -944,7 +987,7 @@ export function GovernanceActions() {
           Ethereum follow-ups <Help term="ethereum governance follow-up" />
         </h4>
         <p className="small muted">
-          Kinds 1–13 dispatch when recorded on gno.land. Their Ethereum delay starts after delivery.
+          Kinds 1–14 dispatch when recorded on gno.land. Their Ethereum delay starts after delivery.
           The Ethereum snapshot below shows maturity and execution controls.
         </p>
         {live?.dispatches

@@ -46,6 +46,23 @@ describe("glossary coverage", () => {
       "client_expiry/gno",
       "client_expiry/ethereum",
       "route_relationship",
+      "Emergency recovery",
+      "Recovery status",
+      "Permanently disabled",
+      "Disabled by",
+      "Kind 14",
+      "Unsupported by this deployment",
+      "After the disable (residual risk)",
+      "Recovery enabled",
+      "Delay",
+      "Threshold",
+      "Cancel threshold",
+      "Silence",
+      "Hold period",
+      "Proposal",
+      "Approvals",
+      "Suspended by the open recovery",
+      "governance action eth.disableRecovery",
     ];
     for (const term of terms) expect(glossaryText(term), term).toBeTruthy();
   });

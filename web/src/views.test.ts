@@ -7,6 +7,7 @@ import type {
   Send,
   Denom,
   EthRoute,
+  EthGovernance,
   GnoGovernance,
   GnoRoute,
   RouteView,
@@ -240,5 +241,36 @@ describe("console data views", () => {
     expect(html).toContain("18446744073709551615");
     expect(html).toContain("No settled decision");
     expect(html).toContain("No dispatch");
+  });
+  it("shows kind 14 suspension even without a maturity timestamp", () => {
+    const ethereum = {
+      epoch: 1,
+      last_seq: "4",
+      gov_client: "client-0",
+      keys: [],
+      flags: [],
+      holds: [],
+      buffered: [],
+      recovery: {
+        enabled: true,
+        supported: true,
+        disabled: false,
+        status: "enabled",
+        delay: 7200,
+        threshold: 3,
+        cancel_threshold: 3,
+        silence: 3600,
+        hold_period: 3600,
+        approved: [],
+        opened_at: 1,
+      },
+      decisions: [
+        { epoch: 1, seq: "4", kind: 14, state_name: "pending", hash: "0xabc", suspended: true },
+      ],
+    } as unknown as EthGovernance;
+    const html = render(GovernancePage, "governance", { gno: null, ethereum });
+    expect(html).toContain("14 disable-recovery");
+    expect(html).toContain("suspended by the open recovery");
+    expect(html).toContain('aria-label="About Suspended by the open recovery"');
   });
 });

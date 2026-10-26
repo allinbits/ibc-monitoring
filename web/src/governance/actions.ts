@@ -3,7 +3,8 @@ import { goString } from "./messages";
 import { evalBool, evalString, evaluate, type LiveState } from "./rpc";
 import { validateValues, type ValidationContext, type Values } from "./validation";
 import { proposalExecutable, readProposals } from "./followups";
-import type { EthRoute } from "../api";
+import { api, type EthRoute } from "../api";
+import { actionAvailability, detectRequirement } from "./availability";
 
 const controls: Record<string, string> = {
   capFloor: "cap_floor",
@@ -76,6 +77,13 @@ export async function preflightAction(
 ): Promise<ValidationContext> {
   const ctx: ValidationContext = { ...live, roles };
   const safe = validateValues(a, values, ctx);
+  const requirement = await detectRequirement(a);
+  if (requirement.status === "unavailable")
+    throw new Error(actionAvailability(a, requirement).disabled);
+  const recovery =
+    a.id === "eth.disableRecovery" ? (await api.governance()).ethereum?.recovery : undefined;
+  const availability = actionAvailability(a, requirement, recovery);
+  if (availability.disabled) throw new Error(availability.disabled);
   if (a.id === "denom.set" && safe.kind === "mint" && /^0x[0-9a-f]{40}$/.test(safe.denom)) {
     const path = `transfer/${live.route.route}/${safe.denom}`;
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(path));

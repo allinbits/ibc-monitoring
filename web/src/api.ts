@@ -393,6 +393,10 @@ export interface EthRecovery {
   silence: number;
   hold_period: number;
   enabled: boolean;
+  supported: boolean;
+  disabled: boolean;
+  status: "enabled" | "disabled" | "never_enabled";
+  disabled_by?: { epoch: number; seq: Seq; block: number; tx: string };
   proposal: string;
   opened_at: number;
   executable_at?: number;

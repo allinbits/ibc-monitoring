@@ -1,5 +1,6 @@
 import { GovernanceActions, EthereumDecisionAction } from "../governance/GovernanceActions";
 import { Label } from "../Help";
+import { RecoveryPanel } from "../governance/RecoveryPanel";
 import { useQuery } from "@tanstack/react-query";
 import { api, type EthGovernance, type GnoGovernance } from "../api";
 import {
@@ -30,6 +31,7 @@ const KINDS = [
   "route settings",
   "settle",
   "reopen",
+  "disable-recovery",
 ];
 
 const ACK = ["", "recorded", "buffered", "duplicate", "conflict", "spent"];
@@ -257,7 +259,6 @@ function GnoSide({ g }: { g: GnoGovernance }) {
 }
 
 function EthSide({ e }: { e: EthGovernance }) {
-  const r = e.recovery;
   return (
     <div className="card">
       <div className="card-heading">
@@ -332,41 +333,8 @@ function EthSide({ e }: { e: EthGovernance }) {
             </div>
           ))}
         </dd>
-        <dt>
-          <Label>recovery</Label>
-        </dt>
-        <dd>
-          {!r.enabled ? (
-            <span>
-              disabled at deployment; emergency recovery is unavailable if the channel is lost
-            </span>
-          ) : (
-            <>
-              enabled: <Label>delay</Label> {r.delay.toLocaleString("en-US")} s ·{" "}
-              <Label>approvals</Label> {r.threshold}/4 · <Label>cancellations</Label>{" "}
-              {r.cancel_threshold}/4 · <Label>silence</Label> {r.silence.toLocaleString("en-US")} s
-              · <Label>hold period</Label> {r.hold_period.toLocaleString("en-US")} s
-              {r.opened_at > 0 ? (
-                <div>
-                  <Pill kind="bad">proposal open</Pill> <Id v={r.proposal} /> since{" "}
-                  {unix(r.opened_at)} · <Label>executable</Label> {unix(r.executable_at)} ·{" "}
-                  <Label>cancel votes</Label> {r.cancel_votes}
-                </div>
-              ) : (
-                <div className="muted small">no open proposal</div>
-              )}
-              <div className="muted small">
-                <Label>Approvals by seat</Label>:{" "}
-                {r.approved.map((a, i) => (
-                  <span key={i} className="kv">
-                    {i}: {a.replace(/^0x0+$/, "none") === "none" ? "none" : <Id v={a} n={6} />}
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
-        </dd>
       </dl>
+      <RecoveryPanel recovery={e.recovery} />
       <h4>Decisions (epoch {e.epoch})</h4>
       {e.decisions.length === 0 ? (
         <Empty what="recorded decision" />
@@ -403,6 +371,13 @@ function EthSide({ e }: { e: EthGovernance }) {
                 </td>
                 <td>
                   <Pill kind={statusKind(d.state_name)}>{d.state_name}</Pill>
+                  {d.suspended && (
+                    <Pill kind="warn">
+                      <Label term="Suspended by the open recovery">
+                        suspended by the open recovery
+                      </Label>
+                    </Pill>
+                  )}
                   {d.tombstoned && (
                     <Pill kind="bad">
                       <Label>tombstoned</Label>
@@ -423,11 +398,6 @@ function EthSide({ e }: { e: EthGovernance }) {
                     <>
                       {unix(d.mature_at)}
                       <div className="muted small">{countdown(new Date(d.mature_at * 1000))}</div>
-                      {d.suspended && (
-                        <Pill kind="warn">
-                          suspended by the open recovery; due at once after it closes
-                        </Pill>
-                      )}
                       {d.revocation && !d.suspended && <Pill kind="bad">revocation: due now</Pill>}
                     </>
                   ) : (

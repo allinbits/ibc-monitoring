@@ -37,6 +37,8 @@ export interface Action {
   pitfalls: string[];
   ethereum_followup?: string;
   verification?: { ok: number; refused: number };
+  requires?: string;
+  verified?: string;
 }
 
 export const GNO_RPC = "https://rpc.2-29-108-12.sslip.io";

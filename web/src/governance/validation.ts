@@ -197,9 +197,14 @@ export function validateParam(
         "A new router client must be custom, without client- or channel- prefix.",
       );
     const current =
-      ["eth.unpause", "eth.limits", "eth.voucher", "eth.route_settings", "eth.reopen"].includes(
-        a.id,
-      ) ||
+      [
+        "eth.unpause",
+        "eth.limits",
+        "eth.voucher",
+        "eth.route_settings",
+        "eth.reopen",
+        "eth.disableRecovery",
+      ].includes(a.id) ||
       (a.id === "eth.client" && all.op === "2") ||
       (name === "oldClientID" && /route_replacement|expect_recovery/.test(a.id));
     if (current)

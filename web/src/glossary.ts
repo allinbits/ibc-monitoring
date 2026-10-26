@@ -13,10 +13,10 @@ export const glossary: Record<string, string> = {
   "router client id":
     "The Ethereum router's current route client is queried through core.CounterpartyClientID(ibcgov.EpochClient()), currently client-0. ethereum-1 is a gno client id and must never be supplied in its place, even though the older deployed governance realm accepts it. Replacement clients use paired custom router ids.",
   "ethereum governance follow-up":
-    "Ethereum kinds 1–13 send an IBC governance packet when recorded. The relayer delivers it to IBCAdmin on Sepolia; after its delay, anyone calls execute(uint64 seq). The seq is in GovPacketSent. MetaMask uses the live Ethereum state to check the epoch and simulate the call before sending.",
+    "Ethereum kinds 1–14 send an IBC governance packet when recorded. The relayer delivers it to IBCAdmin on Sepolia; after its delay, anyone calls execute(uint64 seq). The seq is in GovPacketSent. MetaMask uses the live Ethereum state to check the epoch and simulate the call before sending.",
   ...Object.fromEntries(
     actions.map((action) => [
-      `governance action ${action.id}`,
+      `governance action ${action.id}`.toLowerCase(),
       [
         action.description,
         `Timing: ${action.timing.gno}.`,
@@ -440,7 +440,7 @@ export const glossary: Record<string, string> = {
   "seq (dispatch)":
     "The decision's number on the governance channel within its epoch, the order IBCAdmin records in.",
   "kind (dispatch)":
-    "The Ethereum decision kind: 1 cancel, 2 unpause, 3 seats, 4 limits, 5 voucher, 6 client, 7 upgrade, 8 role, 9 hand-over, 10 route replacement, 11 route settings (quarantine), 12 settle, 13 reopen.",
+    "The Ethereum decision kind: 1 cancel, 2 unpause, 3 seats, 4 limits, 5 voucher, 6 client, 7 upgrade, 8 role, 9 hand-over, 10 route replacement, 11 route settings (quarantine), 12 settle, 13 reopen, 14 disable recovery.",
   "decision (dispatch)": "The ibcgov ledger id the dispatch was made for.",
   "answer / status":
     "IBCAdmin's acknowledgement status: 0 no answer yet, 1 recorded, 2 buffered (stored ahead of a gap, or halted), 3 duplicate, 4 conflict (a different payload for that seq, which flags IBCAdmin), 5 spent.",
@@ -490,23 +490,39 @@ export const glossary: Record<string, string> = {
   "matures / mature at":
     "Derived as recorded time + the kind's delay (24 h for kind 2, 7 days otherwise); a kind 8 revocation is due at recording. Flags, holds or an open recovery can still defer execution past it.",
   "suspended by the open recovery":
-    "An authority-changing kind waiting because an emergency recovery is open. It is due at once after the recovery closes.",
+    "While a recovery is open it is suspended, not refused, and applies once the guardians cancel it; if the recovery executes instead, the new epoch drops it and governance must send it again.",
   "buffered sequences":
     "Decision numbers above last seq that are stored but not recorded. They indicate a gap, or a halted decision that holds back everything after it.",
+  "emergency recovery":
+    "A route replacement the guardians can carry out on Ethereum without the governance channel: a guardian quorum proposes a new client, and it executes after a long public delay unless enough guardians cancel it. It exists to repair a lost or poisoned channel, and it is an extra trust in the guardians while it is enabled.",
+  "recovery status":
+    "`enabled` (the guardians can open a recovery), `disabled` (a kind 14 turned it off for good) or `never_enabled` (deployed with a delay of 0, which counts as disabled from the start).",
   "recovery enabled":
-    "Whether the guardian-proposed route replacement that bypasses the governance channel exists. It is fixed at deployment, and a delay of 0 disables it.",
+    "The guardians can open a recovery: the delay is above 0 and the permanent disable is not set. New deployments launch with it enabled.",
+  "permanently disabled":
+    "A kind 14 from gno.land governance has applied on Ethereum. Nobody can open or execute a recovery again: no decision, executor or upgrade can turn it back on, and the guardians could not have turned it off themselves. Read from `IBCAdmin.recoveryDisabled()`, a one-way latch kept outside IBCAdmin's own storage. Cancelling a leftover open proposal and `clearRecoveryBlock` stay available.",
+  "disabled by":
+    "The kind 14 decision (epoch and sequence) whose execution set the latch, with its Ethereum block and transaction, from the `EmergencyRecoveryDisabled` event. Empty for a deployment that started with the recovery off.",
+  "after the disable (residual risk)":
+    "The guardians can no longer repair a lost governance channel. If the epoch's client expires, freezes or is poisoned, only a repair Ethereum had already recorded before the loss (a kind 6 client migration or a kind 10 route replacement) can still execute; otherwise the Ethereum side's backing (escrowed tokens and its vouchers) is stranded for good. Governance can still do anything through a working channel, including a route replacement of its own.",
+  "kind 14 (disable recovery)":
+    "The governance decision that permanently disables the emergency recovery. Only gno.land governance can send it: the governor before the yield, GovDAO after it, built with `ibcgov.NewEthDisableRecoveryRequest` over the route's current router client. On Ethereum it waits the standard 7 days, deferred by IBCAdmin's flags and holds like the other 7-day kinds, then anyone calls `IBCAdmin.execute(seq)`. While a recovery is open it is suspended, not refused, and applies once the guardians cancel it; if the recovery executes instead, the new epoch drops it and governance must send it again. A second kind 14, or one sent to a deployment that never enabled the recovery, is spent (`disabled`).",
+  "unsupported by this deployment":
+    "The deployment's IBCAdmin predates kind 14 (`supported: false`): it has no `recoveryDisabled()` view, and its realm has no `NewEthDisableRecoveryRequest`. Its recovery cannot be permanently disabled, so its status comes from the delay alone. This is not an error or an alarm. The live testnet is such a deployment.",
   delay:
-    "Seconds from a recovery proposal opening until anyone may execute it. Production requires at least 30 days.",
+    "Seconds from a recovery proposal opening until anyone may execute it. Mainnet requires at least 30 days (the launch value); test networks may use shorter builds. 0 means the deployment has no recovery.",
   "threshold (approvals)":
-    "How many of the 4 guardian seats must approve the same proposal, while it is eligible, for it to open.",
-  "cancel threshold": "How many guardian cancel votes cancel an open proposal.",
+    "How many of the 4 guardian seats (3 or 4; 3 at launch) must approve the same proposal, while the route is eligible, for it to open.",
+  "cancel threshold":
+    "How many guardian cancel votes close an open proposal (3 or 4; 3 at launch). It is never above the approval threshold, so the guardians who can open a proposal can always close it.",
   silence:
-    "The proposal is eligible once no decision has been recorded for this many seconds (0 turns this criterion off). It is also eligible while the epoch's client is frozen or expired.",
+    "The route becomes eligible for a recovery once no decision has been recorded and no epoch opened for this many seconds (launch 30 days; 0 turns this criterion off). It is also eligible while the epoch's client is frozen or expired.",
   "hold period":
-    "The proposal is eligible once a hold has stood on IBCAdmin for this many seconds (0 turns this criterion off).",
+    "The route becomes eligible once a hold has stood on IBCAdmin for this many seconds (launch 14 days; 0 turns this criterion off).",
   "proposal / opened at / executable at / cancel votes":
-    "The open proposal's hash, when it opened (unix seconds; 0 means none), opened at + delay, and the guardian cancel votes so far.",
-  "approvals by seat": "The proposal hash each guardian seat approved. All zeros means none.",
+    "The open proposal's hash, when it opened (unix seconds; 0 means none), opened at + delay, and the guardian cancel votes so far. While a proposal is open, receives and escrowed sends on the route are refused, and kinds 3, 6 to 10 and 14 are suspended.",
+  "approvals by seat":
+    "The proposal hash each guardian seat approved. All zeros means none. The disable clears every pending approval.",
   "bridge / payout meter":
     "Capacity remaining for claim payouts. It refills toward the day cap at day cap / 86,400 per second; payouts consume it. It starts empty at launch and on a new payouts epoch.",
   "claims / sweeps":
@@ -639,7 +655,12 @@ const aliases: Record<string, string> = {
   current_client: "route key / client (ethereum)",
   gno_counterparty: "counterparty",
   gno_route: "route key",
-  approvals: "threshold (approvals)",
+  recovery: "emergency recovery",
+  threshold: "threshold (approvals)",
+  "kind 14": "kind 14 (disable recovery)",
+  "opened at": "proposal / opened at / executable at / cancel votes",
+  "executable at": "proposal / opened at / executable at / cancel votes",
+  approvals: "approvals by seat",
   cancellations: "cancel threshold",
   proposal: "proposal / opened at / executable at / cancel votes",
   executable: "proposal / opened at / executable at / cancel votes",
