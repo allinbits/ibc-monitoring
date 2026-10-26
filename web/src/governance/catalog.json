@@ -58,15 +58,19 @@
       }
     },
     "counts": {
-      "actions": 78,
+      "actions": 79,
       "per_role": {
-        "governor": 59,
+        "governor": 60,
         "anyone": 11,
-        "govdao": 63,
+        "govdao": 64,
         "guardian": 2,
         "watch": 2
       },
       "simulation_cases": 130
+    },
+    "action_fields": {
+      "requires": "Optional. The realm function the action's source calls that older deployments may lack (e.g. ibcgov.NewEthDisableRecoveryRequest). When the deployed realm does not export it, the UI shows the action as not available on this deployment instead of offering a transaction that would fail to compile.",
+      "verified": "Optional. Free-text note on how the action was verified when verification counts do not apply, e.g. why it could not be simulated on the current testnet."
     }
   },
   "actions": [
@@ -74,7 +78,7 @@
       "id": "yield",
       "category": "lifecycle",
       "title": "Yield to GovDAO",
-      "description": "The governor's one-way hand-over (ADR pr6375 \u00a77.7): from this block only GovDAO proposals decide and Govern is closed for good. Queued decisions still apply by Execute.",
+      "description": "The governor's one-way hand-over (ADR pr6375 §7.7): from this block only GovDAO proposals decide and Govern is closed for good. Queued decisions still apply by Execute.",
       "roles": ["governor"],
       "tx": {
         "type": "/vm.m_call",
@@ -171,7 +175,7 @@
       "id": "cancel",
       "category": "lifecycle",
       "title": "Cancel a pending gno-side decision",
-      "description": "Withdraws a pending (queued) gno-side decision at once (ADR pr6375 \u00a77.5: cancels are immediate). Guardians cannot cancel; only a decision can. A cancelled recovery expectation releases its intent.",
+      "description": "Withdraws a pending (queued) gno-side decision at once (ADR pr6375 §7.5: cancels are immediate). Guardians cannot cancel; only a decision can. A cancelled recovery expectation releases its intent.",
       "tx": {
         "type": "/vm.m_run",
         "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCancelRequest(cross(cur), {{id}}))\n}\n",
@@ -203,7 +207,7 @@
       "id": "core.update_impl",
       "category": "core",
       "title": "Activate a core implementation",
-      "description": "Activates a registered implementation of gno.land/r/aib/ibc/core after 7 days (ADR pr6375 \u00a76.12).",
+      "description": "Activates a registered implementation of gno.land/r/aib/ibc/core after 7 days (ADR pr6375 §6.12).",
       "tx": {
         "type": "/vm.m_run",
         "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCoreUpdateImplRequest(cross(cur), \"{{path}}\"))\n}\n",
@@ -419,7 +423,7 @@
       "id": "core.pause",
       "category": "core",
       "title": "Pause the core packet path",
-      "description": "Suspends the core's packet path (SendPacket, RecvPacket, acks, timeouts) at once. Reserved for a core bug: it blocks refunds too (ADR pr6375 \u00a77.3).",
+      "description": "Suspends the core's packet path (SendPacket, RecvPacket, acks, timeouts) at once. Reserved for a core bug: it blocks refunds too (ADR pr6375 §7.3).",
       "tx": {
         "type": "/vm.m_run",
         "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewCorePauseRequest(cross(cur)))\n}\n",
@@ -596,7 +600,7 @@
       "id": "core.migrate_client_fork_schedule",
       "category": "core",
       "title": "Migrate a client's fork schedule",
-      "description": "Migrates the Ethereum fork schedule of a live core client after 7 days (ADR pr6375 R16, \u00a76.12); must land before the fork epoch.",
+      "description": "Migrates the Ethereum fork schedule of a live core client after 7 days (ADR pr6375 R16, §6.12); must land before the fork epoch.",
       "tx": {
         "type": "/vm.m_run",
         "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewMigrateClientRequest(cross(cur), \"{{clientID}}\", \"ethereum-fork-schedule\", \"{{paramsHex}}\"))\n}\n",
@@ -2588,6 +2592,50 @@
         "ok": 1,
         "refused": 0
       }
+    },
+    {
+      "id": "eth.disableRecovery",
+      "kind": 14,
+      "category": "ethereum",
+      "title": "Disable Ethereum's emergency recovery for good (kind 14)",
+      "description": "Permanently disables IBCAdmin's guardian emergency recovery (route replacement by a guardian quorum). One-way: nothing (no decision, executor or upgrade) can enable it again, and the guardians cannot disable it themselves. Governance only: the governor before the yield, GovDAO after it. IBCAdmin applies it after the standard 7-day delay, deferred by its flags and holds like the other 7-day kinds; while a recovery is open it is suspended (still pending) and applies once the guardians cancel the recovery; if the recovery executes instead, its epoch switch abandons the disable, which must then be sent again in the new epoch. Afterwards a lost governance channel can no longer be repaired by the guardians: only a repair Ethereum already recorded before the loss (a kind 6 or kind 10) can still execute.",
+      "tx": {
+        "type": "/vm.m_run",
+        "governor_source": "package main\n\nimport \"gno.land/r/aib/ibc/ibcgov\"\n\nfunc main(cur realm) {\n\tibcgov.Govern(cross(cur), ibcgov.NewEthDisableRecoveryRequest(cross(cur), \"{{clientID}}\"))\n}\n",
+        "govdao_source": "package main\n\nimport (\n\t\"gno.land/r/aib/ibc/ibcgov\"\n\t\"gno.land/r/gov/dao\"\n)\n\nfunc main(cur realm) {\n\tpid := dao.MustCreateProposal(cross(cur), ibcgov.NewEthDisableRecoveryRequest(cross(cur), \"{{clientID}}\").Proposal())\n\tprintln(\"proposal\", int64(pid))\n}\n"
+      },
+      "params": [
+        {
+          "name": "clientID",
+          "type": "router client id",
+          "validation": "the Ethereum router's CURRENT client of the route = core.CounterpartyClientID(ibcgov.EpochClient()) (live: client-0); the builder's currentRouterClient scope refuses any other id, and IBCAdmin spends it ('client') unless it equals its epoch's govClient. Never the gno id (ethereum-1).",
+          "help": "The router's client id of the route on Ethereum (the governance epoch's client).",
+          "default": "client-0"
+        }
+      ],
+      "timing": {
+        "gno": "dispatched",
+        "execute_needed": false,
+        "ethereum": "IBCAdmin applies it after its 7-day delay (Sepolia testnet build: WEEK = 3598 s), deferred by IBCAdmin's flags and holds and suspended while an emergency recovery is open; then IBCAdmin.execute(seq) on Ethereum.",
+        "notes": "Recorded and dispatched at once on gno.land as an IBC packet over the epoch client. The relayer carries it to IBCAdmin, which records it (ack status 1) and applies it after its own delay. Anyone then calls IBCAdmin.execute(seq) on Ethereum (permissionless): an Ethereum transaction, outside Adena. gno.land records the dispatch and its ack but keeps no disabled flag: Ethereum's IBCAdmin.recoveryDisabled() is authoritative."
+      },
+      "pitfalls": [
+        "Irreversible: once applied, a frozen, expired or poisoned governance client strands Ethereum's backing unless a repair was already recorded on IBCAdmin before the loss. Decide it only once the channel's clients are trusted to stay healthy without the guardians' backstop.",
+        "Not available on the live testnet: its realm predates NewEthDisableRecoveryRequest and its IBCAdmin has no kind 14 (no recoveryDisabled() view). The builder exists on gno-realms feat/ibc-controls.",
+        "Suspended, not refused, while an emergency recovery is open on Ethereum; an executed recovery abandons it with the old epoch, so send it again over the new client.",
+        "Guardian flags and holds defer it like any 7-day kind; a hold standing holdPeriod can make the route eligible for a recovery, which then suspends the disable.",
+        "Spent on Ethereum, at recording or execution, if the recovery is already off ('disabled': a second kind 14, or a deployment with recovery delay 0), if clientID is not the epoch's client ('client'), or if the params are malformed ('params').",
+        "Spent at recording (tx still succeeds) if the packet cannot be sent: core or gov port paused, epoch client not Active, or its latest consensus timestamp is ahead of now+6h.",
+        "Ethereum follow-up IBCAdmin.execute(seq) needs an Ethereum wallet (not Adena). seq is in the GovPacketSent event (attr seq) and the decision note 'dispatched as epoch E seq S'."
+      ],
+      "ethereum_followup": "IBCAdmin(0x3D8B06752b98A3D5ee5368870174B278Cc7a1442 on Sepolia).execute(uint64 seq) once due (7 days after recording, later if a flag or hold defers it, never while a recovery is open); confirm with IBCAdmin.recoveryDisabled() == true and the EmergencyRecoveryDisabled(epoch, seq) event.",
+      "roles": ["governor", "govdao"],
+      "verification": {
+        "ok": 0,
+        "refused": 0
+      },
+      "verified": "Not simulated: the live testnet's realm predates NewEthDisableRecoveryRequest (and its IBCAdmin has no kind 14), so no simulation case exists. The builder exists on gno-realms feat/ibc-controls (1eee8e8; filetest z2j); the contracts on gno-eth-ibc feat/ibc-controls (9cd0154).",
+      "requires": "ibcgov.NewEthDisableRecoveryRequest"
     },
     {
       "id": "eth.retransmit",

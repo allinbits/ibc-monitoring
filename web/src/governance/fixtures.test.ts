@@ -35,16 +35,16 @@ function param(id: string, name: string, value: string, other: Values = {}) {
 }
 
 describe("catalog coverage and message generation", () => {
-  it("accounts for all 78 actions, with 75 typed forms and three explained tooling / builder entries", () => {
-    expect(actions).toHaveLength(78);
-    expect(new Set(actions.map((a) => a.id)).size).toBe(78);
+  it("accounts for all 79 actions, with 76 typed forms and three explained tooling / builder entries", () => {
+    expect(actions).toHaveLength(79);
+    expect(new Set(actions.map((a) => a.id)).size).toBe(79);
     expect(actions.filter(browserLimitation).map((a) => a.id)).toEqual([
       "govern",
       "transfer.recapitalize",
       "govdao.propose",
     ]);
     expect(actions.filter((a) => a.kind).map((a) => a.kind)).toEqual(
-      Array.from({ length: 13 }, (_, i) => i + 1),
+      Array.from({ length: 14 }, (_, i) => i + 1),
     );
   });
   for (const action of actions.filter((a) => !browserLimitation(a))) {
@@ -114,8 +114,8 @@ describe("catalog coverage and message generation", () => {
   });
   it("filters governor, GovDAO, guardian, watch and anyone correctly across yield", () => {
     const count = (state: RoleState) => actions.filter((a) => canPerform(a, state)).length;
-    expect(count(governorFixture)).toBe(70);
-    expect(count(dao)).toBe(74);
+    expect(count(governorFixture)).toBe(71);
+    expect(count(dao)).toBe(75);
     expect(count({ ...dao, yielded: "0", govdaoGoverns: false })).toBe(17);
     expect(count({ ...governorFixture, roles: ["anyone", "guardian"] })).toBe(13);
     expect(count({ ...governorFixture, roles: ["anyone", "watch"] })).toBe(13);
