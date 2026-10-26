@@ -110,6 +110,7 @@ func ethFixture(t *testing.T, head time.Time) (*ethviews.Views, *ethrpc.Client, 
 		HoldPeriod      uint64
 	}{})
 	srv.Returns(admin, "recovery", [32]byte{}, uint64(0), uint8(0), [4][32]byte{})
+	srv.Returns(admin, "recoveryDisabled", true) // delay 0: latched from the start
 	srv.Returns(xfer, "routeKey", "client-0")
 	srv.Returns(xfer, "currentClient", "client-0")
 	srv.Returns(xfer, "getEscrow", common.HexToAddress("0x5e5e"))

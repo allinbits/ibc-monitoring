@@ -63,6 +63,7 @@ func minimalAdmin(t *testing.T, srv *ethrpctest.Server) common.Address {
 		HoldPeriod      uint64
 	}{})
 	srv.Returns(admin, "recovery", [32]byte{}, uint64(0), uint8(0), [4][32]byte{})
+	srv.Returns(admin, "recoveryDisabled", true) // delay 0: latched from the start
 	return admin
 }
 

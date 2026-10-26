@@ -90,26 +90,60 @@ type EthDecision struct {
 	MatureAt int64 `json:"mature_at,omitempty"`
 	// Revocation is a kind 8 with grant == false (a non-zero account):
 	// applied at recording unless an open recovery suspended it, and due at
-	// once when the recovery closes. Suspended says the recovery is open.
+	// once when the recovery closes. Suspended says the recovery is open
+	// (set for a pending revocation and a pending kind 14, which an open
+	// recovery suspends).
 	Revocation bool   `json:"revocation,omitempty"`
 	Suspended  bool   `json:"suspended,omitempty"`
 	Params     string `json:"params,omitempty"` // hex, while stored
 	Tombstoned bool   `json:"tombstoned"`
 }
 
+// Emergency recovery statuses (EthRecovery.Status).
+const (
+	// RecoveryEnabled: the guardians can open a recovery.
+	RecoveryEnabled = "enabled"
+	// RecoveryDisabled: a kind 14 disabled it for good.
+	RecoveryDisabled = "disabled"
+	// RecoveryNeverEnabled: deployed with delay 0 (latched from the start).
+	RecoveryNeverEnabled = "never_enabled"
+)
+
 // EthRecovery is IBCAdmin's emergency recovery state.
 type EthRecovery struct {
-	Delay           uint64   `json:"delay"`
-	Threshold       uint8    `json:"threshold"`
-	CancelThreshold uint8    `json:"cancel_threshold"`
-	Silence         uint64   `json:"silence"`
-	HoldPeriod      uint64   `json:"hold_period"`
-	Enabled         bool     `json:"enabled"`
-	Proposal        string   `json:"proposal"` // hash, zero when none
-	OpenedAt        uint64   `json:"opened_at"`
-	ExecutableAt    uint64   `json:"executable_at,omitempty"`
-	CancelVotes     uint8    `json:"cancel_votes"`
-	Approved        []string `json:"approved"` // per guardian seat, the proposal hash approved
+	Delay           uint64 `json:"delay"`
+	Threshold       uint8  `json:"threshold"`
+	CancelThreshold uint8  `json:"cancel_threshold"`
+	Silence         uint64 `json:"silence"`
+	HoldPeriod      uint64 `json:"hold_period"`
+	// Enabled is whether the guardians can open a recovery: a non-zero
+	// delay and the permanent disable not set.
+	Enabled bool `json:"enabled"`
+	// Supported is whether the deployment has the permanent disable (kind
+	// 14, IBCAdmin.recoveryDisabled()); an older one has neither, so its
+	// recovery cannot be disabled and Disabled is false.
+	Supported bool `json:"supported"`
+	// Disabled is IBCAdminNative's latch: set by a kind 14, or from the
+	// start on a deployment with delay 0. It is never reset.
+	Disabled bool `json:"disabled"`
+	// Status is RecoveryEnabled, RecoveryDisabled or RecoveryNeverEnabled.
+	Status string `json:"status"`
+	// DisabledBy is the kind 14 that set the latch
+	// (EmergencyRecoveryDisabled), when found in the history read.
+	DisabledBy   *EthRecoveryDisable `json:"disabled_by,omitempty"`
+	Proposal     string              `json:"proposal"` // hash, zero when none
+	OpenedAt     uint64              `json:"opened_at"`
+	ExecutableAt uint64              `json:"executable_at,omitempty"`
+	CancelVotes  uint8               `json:"cancel_votes"`
+	Approved     []string            `json:"approved"` // per guardian seat, the proposal hash approved
+}
+
+// EthRecoveryDisable is an EmergencyRecoveryDisabled(epoch, seq) event.
+type EthRecoveryDisable struct {
+	Epoch uint32 `json:"epoch"`
+	Seq   Seq    `json:"seq"`
+	Block uint64 `json:"block"`
+	Tx    string `json:"tx"`
 }
 
 // EthGovernance is the Ethereum side of the governance dashboard.
@@ -154,7 +188,7 @@ func DecisionStateName(s uint8) string {
 
 // KindName maps a governance kind to the ADR's name.
 func KindName(k uint8) string {
-	names := [...]string{"", "cancel", "unpause", "seats", "limits", "voucher", "client", "upgrade", "role", "hand-over", "route-replacement", "route-settings", "settle", "reopen"}
+	names := [...]string{"", "cancel", "unpause", "seats", "limits", "voucher", "client", "upgrade", "role", "hand-over", "route-replacement", "route-settings", "settle", "reopen", "disable-recovery"}
 	if int(k) < len(names) {
 		return names[k]
 	}

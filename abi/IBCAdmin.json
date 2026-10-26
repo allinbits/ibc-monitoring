@@ -954,6 +954,19 @@
  },
  {
   "type": "function",
+  "name": "recoveryDisabled",
+  "inputs": [],
+  "outputs": [
+   {
+    "name": "",
+    "type": "bool",
+    "internalType": "bool"
+   }
+  ],
+  "stateMutability": "view"
+ },
+ {
+  "type": "function",
   "name": "replacementAnchor",
   "inputs": [
    {
@@ -1236,6 +1249,25 @@
     "type": "string",
     "indexed": false,
     "internalType": "string"
+   }
+  ],
+  "anonymous": false
+ },
+ {
+  "type": "event",
+  "name": "EmergencyRecoveryDisabled",
+  "inputs": [
+   {
+    "name": "epoch",
+    "type": "uint32",
+    "indexed": true,
+    "internalType": "uint32"
+   },
+   {
+    "name": "seq",
+    "type": "uint64",
+    "indexed": true,
+    "internalType": "uint64"
    }
   ],
   "anonymous": false
@@ -1722,6 +1754,11 @@
  {
   "type": "error",
   "name": "RecoveryNotEligible",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "RecoveryPermanentlyDisabled",
   "inputs": []
  },
  {

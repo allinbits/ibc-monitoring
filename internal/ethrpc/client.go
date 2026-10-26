@@ -221,6 +221,22 @@ func (e *ErrRevert) Error() string {
 	return fmt.Sprintf("%s reverted: 0x%x", e.Method, e.Data)
 }
 
+// emptyRevert reports a revert without data: geth answers a REVERT with no
+// return data (an unknown selector on a contract without a fallback, a bare
+// revert()) as error code 3 or -32000, "execution reverted", and no data
+// field. Any other error (transport, rate limit, timeout) is not a revert.
+func emptyRevert(err error) bool {
+	var re rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	if de, ok := re.(rpc.DataError); ok && de.ErrorData() != nil {
+		return false
+	}
+	code := re.ErrorCode()
+	return (code == 3 || code == -32000) && strings.HasPrefix(re.Error(), "execution reverted")
+}
+
 // Call runs an eth_call of abi.method(args...) on to at block and unpacks the
 // outputs.
 func (c *Client) Call(ctx context.Context, to common.Address, a *gethabi.ABI, method string, block uint64, args ...any) ([]any, error) {
@@ -242,6 +258,9 @@ func (c *Client) Call(ctx context.Context, to common.Address, a *gethabi.ABI, me
 				reason, _ := gethabi.UnpackRevert(b)
 				return nil, &ErrRevert{Method: method, Reason: reason, Data: b}
 			}
+		}
+		if emptyRevert(err) {
+			return nil, &ErrRevert{Method: method}
 		}
 		return nil, redactErr(fmt.Errorf("ethrpc %s: %s: %w", c.name, method, err))
 	}

@@ -2,7 +2,7 @@
 
 Extracted with `scripts/extract-abis.py` from a Foundry build (`make build`) of
 [allinbits/gno-eth-ibc](https://github.com/allinbits/gno-eth-ibc) at branch
-`feat/ibc-controls`, revision `72a41de` (solc 0.8.28, via_ir, cancun).
+`feat/ibc-controls`, revision `9cd0154` (solc 0.8.28, via_ir, cancun).
 
 | File | Source | Note |
 |---|---|---|

@@ -82,6 +82,7 @@ func fixture(t *testing.T) (*Views, ethrpc.Block, *ethrpctest.Server) {
 	})
 	srv.Returns(adminAddr, "recoveryConfig", recoveryConfig{Delay: 30 * 86400, Threshold: 3, CancelThreshold: 3, Silence: 30 * 86400, HoldPeriod: 14 * 86400})
 	srv.Returns(adminAddr, "recovery", [32]byte{0x77}, uint64(1776000000), uint8(1), [4][32]byte{{0x77}, {0x77}, {}, {}})
+	srv.Returns(adminAddr, "recoveryDisabled", false)
 
 	// Transfer app.
 	srv.Returns(xferAddr, "routeKey", "client-0")
@@ -214,7 +215,7 @@ func TestGovernance(t *testing.T) {
 		t.Fatalf("buffered: %v", g.Buffered)
 	}
 	r := g.Recovery
-	if !r.Enabled || r.Delay != 30*86400 || r.Threshold != 3 || r.OpenedAt != 1776000000 || r.ExecutableAt != 1776000000+30*86400 || r.CancelVotes != 1 {
+	if !r.Enabled || !r.Supported || r.Disabled || r.Status != model.RecoveryEnabled || r.DisabledBy != nil || r.Delay != 30*86400 || r.Threshold != 3 || r.OpenedAt != 1776000000 || r.ExecutableAt != 1776000000+30*86400 || r.CancelVotes != 1 {
 		t.Fatalf("recovery: %+v", r)
 	}
 	if len(r.Approved) != 4 || r.Approved[0] != common.Hash([32]byte{0x77}).Hex() || r.Approved[2] != (common.Hash{}).Hex() {

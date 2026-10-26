@@ -1,7 +1,9 @@
 package ethviews
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
@@ -13,6 +15,10 @@ import (
 
 // Window is IBCAdmin's buffering window (W = 64, ADR §9).
 const Window = 64
+
+// KindDisableRecovery is kind 14, the permanent disable of the emergency
+// recovery (ADR §7.12).
+const KindDisableRecovery = 14
 
 // Delays per kind (ADR §7.6): 24 h for an unpause, 7 days otherwise.
 const (
@@ -136,8 +142,9 @@ func (v *Views) Governance(ctx context.Context, b ethrpc.Block) (model.EthGovern
 	}
 	// A pending revocation is pending only because an open recovery
 	// suspends it: a state apart from maturity (docs/design.md §7.10a).
+	// A pending kind 14 waits for the recovery to close (§7.12).
 	for i := range g.Decisions {
-		if g.Decisions[i].Revocation && g.Decisions[i].State == 2 {
+		if (g.Decisions[i].Revocation || g.Decisions[i].Kind == KindDisableRecovery) && g.Decisions[i].State == 2 {
 			g.Decisions[i].Suspended = g.Recovery.OpenedAt != 0
 		}
 	}
@@ -222,7 +229,21 @@ func (v *Views) Recovery(ctx context.Context, b ethrpc.Block) (model.EthRecovery
 		return r, fmt.Errorf("recoveryConfig: unexpected type %T", out[0])
 	}
 	r.Delay, r.Threshold, r.CancelThreshold, r.Silence, r.HoldPeriod = cfg.Delay, cfg.Threshold, cfg.CancelThreshold, cfg.Silence, cfg.HoldPeriod
-	r.Enabled = cfg.Delay > 0
+	if r.Supported, r.Disabled, err = v.recoveryDisabled(ctx, b); err != nil {
+		return r, err
+	}
+	r.Enabled = cfg.Delay > 0 && !r.Disabled
+	switch {
+	case cfg.Delay == 0:
+		r.Status = model.RecoveryNeverEnabled
+	case r.Disabled:
+		r.Status = model.RecoveryDisabled
+		if r.DisabledBy, err = v.recoveryDisable(ctx, b); err != nil {
+			return r, err
+		}
+	default:
+		r.Status = model.RecoveryEnabled
+	}
 	out, err = v.call(ctx, v.addrs.Admin, v.admin, "recovery", b)
 	if err != nil {
 		return r, err
@@ -244,6 +265,59 @@ func (v *Views) Recovery(ctx context.Context, b ethrpc.Block) (model.EthRecovery
 		r.ExecutableAt = r.OpenedAt + r.Delay
 	}
 	return r, nil
+}
+
+// recoveryDisabled reads IBCAdmin.recoveryDisabled(), the permanent disable's
+// latch. A deployment that predates kind 14 has no such function: its call
+// reverts without data and its code lacks the selector, which is reported as
+// unsupported (supported false), never as an error. Any other failure, a
+// transport error or a revert of a deployment that has the function, is
+// returned.
+func (v *Views) recoveryDisabled(ctx context.Context, b ethrpc.Block) (supported, disabled bool, err error) {
+	const method = "recoveryDisabled"
+	disabled, err = one[bool](ctx, v, v.addrs.Admin, v.admin, method, b)
+	if err == nil {
+		return true, disabled, nil
+	}
+	var rev *ethrpc.ErrRevert
+	if !errors.As(err, &rev) || len(rev.Data) != 0 {
+		return false, false, err
+	}
+	code, cerr := v.rpc.Code(ctx, v.addrs.Admin, b.Number)
+	if cerr != nil {
+		return false, false, cerr
+	}
+	if len(code) == 0 || bytes.Contains(code, v.admin.Methods[method].ID) {
+		return false, false, err
+	}
+	return false, false, nil
+}
+
+// recoveryDisable finds the kind 14 that set the latch: the last
+// EmergencyRecoveryDisabled in the history read (nil when none, as on a
+// deployment that started latched).
+func (v *Views) recoveryDisable(ctx context.Context, b ethrpc.Block) (*model.EthRecoveryDisable, error) {
+	ev, ok := v.admin.Events["EmergencyRecoveryDisabled"]
+	if !ok {
+		return nil, fmt.Errorf("admin ABI has no EmergencyRecoveryDisabled event")
+	}
+	logs, err := v.rpc.Logs(ctx, v.addrs.Admin, [][]common.Hash{{ev.ID}}, v.HistoryFrom, b.Number)
+	if err != nil {
+		return nil, err
+	}
+	if len(logs) == 0 {
+		return nil, nil
+	}
+	l := logs[len(logs)-1]
+	if len(l.Topics) != 3 {
+		return nil, fmt.Errorf("EmergencyRecoveryDisabled at block %d: %d topics", l.BlockNumber, len(l.Topics))
+	}
+	return &model.EthRecoveryDisable{
+		Epoch: uint32(l.Topics[1].Big().Uint64()),
+		Seq:   model.Seq(l.Topics[2].Big().Uint64()),
+		Block: l.BlockNumber,
+		Tx:    l.TxHash.Hex(),
+	}, nil
 }
 
 // Bindings reads the executor's bindings() (router, access manager, transfer).

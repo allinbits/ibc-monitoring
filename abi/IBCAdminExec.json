@@ -498,6 +498,25 @@
  },
  {
   "type": "event",
+  "name": "EmergencyRecoveryDisabled",
+  "inputs": [
+   {
+    "name": "epoch",
+    "type": "uint32",
+    "indexed": true,
+    "internalType": "uint32"
+   },
+   {
+    "name": "seq",
+    "type": "uint64",
+    "indexed": true,
+    "internalType": "uint64"
+   }
+  ],
+  "anonymous": false
+ },
+ {
+  "type": "event",
   "name": "EpochNoticeAcknowledged",
   "inputs": [
    {
@@ -978,6 +997,11 @@
  {
   "type": "error",
   "name": "RecoveryNotEligible",
+  "inputs": []
+ },
+ {
+  "type": "error",
+  "name": "RecoveryPermanentlyDisabled",
   "inputs": []
  },
  {

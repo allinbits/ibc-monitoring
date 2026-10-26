@@ -5,6 +5,7 @@ package ethrpctest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -22,6 +23,20 @@ import (
 // Handler answers one method: it receives the unpacked inputs and returns
 // the output values to pack.
 type Handler func(args []any) ([]any, error)
+
+// RPCError is a handler error the server answers verbatim, with no data
+// field: EmptyRevert is how geth reports a revert without return data (an
+// unknown selector on a contract without a fallback); any other code is a
+// node-side failure, not a revert.
+type RPCError struct {
+	Code    int
+	Message string
+}
+
+func (e *RPCError) Error() string { return e.Message }
+
+// EmptyRevert is a revert without data, as geth answers it.
+var EmptyRevert = &RPCError{Code: 3, Message: "execution reverted"}
 
 // Server is the fake node.
 type Server struct {
@@ -299,6 +314,10 @@ func (s *Server) call(params []json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: -32602, Message: err.Error()}
 	}
 	outs, err := h(args)
+	var re *RPCError
+	if errors.As(err, &re) {
+		return nil, &rpcError{Code: re.Code, Message: re.Message}
+	}
 	if err != nil {
 		return nil, &rpcError{Code: 3, Message: "execution reverted", Data: hexutil.Encode(revertReason(err.Error()))}
 	}
