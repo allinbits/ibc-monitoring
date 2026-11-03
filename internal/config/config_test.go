@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +66,34 @@ alerts:
 	}
 	if c, err := Parse([]byte("instance:\n  require_cross_check: false\ngno:\n  rpc_url: http://a\n"), lookup); err != nil || c.Instance.CrossCheckRequired() {
 		t.Fatalf("explicit opt-out: %v", err)
+	}
+}
+
+func TestArcExampleAndLegacyDefaults(t *testing.T) {
+	b, err := os.ReadFile("../../ibcmon.arc.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(b, func(string) (string, bool) { return "https://gno-second.example", true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Gno.ClientType != "arc" || cfg.Gno.RouteClientID != "arc-1" || cfg.Gno.ChainID != "test-arc-1" || cfg.Eth.ChainID != "5042002" || cfg.Eth.ChainName != "Arc testnet" || cfg.Eth.BeaconURL != "" || cfg.Eth.Finality != "tag" || cfg.Eth.LogChunk != 1000 || !cfg.Eth.HistoryFromDeployment {
+		t.Fatalf("arc: %+v", cfg)
+	}
+	if cfg.Monitor.Freshness.EthereumMaxHeadAge != 30*time.Second || cfg.Monitor.Freshness.EthMaxProviderLag != 20 || cfg.Eth.NativeCurrency.Symbol != "USDC" || cfg.Eth.NativeCurrency.Decimals != 18 {
+		t.Fatalf("arc settings: %+v", cfg)
+	}
+	old, err := Parse(nil, os.LookupEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Gno.ClientType != "ethereum" || old.Gno.RouteClientID != "ethereum-1" || old.Eth.ChainName != "Ethereum" || old.Eth.ChainID != "11155111" || old.Eth.LogChunk != 2000 || old.Eth.HistoryFromDeployment || old.Monitor.Freshness.EthereumMaxHeadAge != 45*time.Minute || old.Monitor.Freshness.EthMaxProviderLag != 64 {
+		t.Fatalf("legacy defaults: %+v", old)
+	}
+	for _, invalid := range []string{`eth: {chain_id: "0"}`, `eth: {chain_id: "not-a-chain"}`, `gno: {client_type: typo}`, `eth: {browser_rpc_url: "https://user:secret@example.com"}`} {
+		if _, err := Parse([]byte(invalid), os.LookupEnv); err == nil {
+			t.Fatalf("accepted %s", invalid)
+		}
 	}
 }

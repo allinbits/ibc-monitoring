@@ -1,3 +1,4 @@
+import { evmText } from "../network";
 import { GovernanceActions, EthereumDecisionAction } from "../governance/GovernanceActions";
 import { Label } from "../Help";
 import { RecoveryPanel } from "../governance/RecoveryPanel";
@@ -146,7 +147,10 @@ function GnoSide({ g }: { g: GnoGovernance }) {
           </tbody>
         </Table>
       )}
-      <h4>Dispatches to Ethereum (epoch {g.epoch})</h4>
+      <h4>
+        {evmText("Dispatches to Ethereum (epoch ")}
+        {g.epoch})
+      </h4>
       {g.dispatches.length === 0 ? (
         <Empty what="dispatch" />
       ) : (
@@ -262,7 +266,7 @@ function EthSide({ e }: { e: EthGovernance }) {
   return (
     <div className="card">
       <div className="card-heading">
-        <h3>Ethereum · IBCAdmin</h3>
+        <h3>{evmText("Ethereum · IBCAdmin")}</h3>
         <Provenance p={e.provenance} />
       </div>
       <dl>
@@ -339,7 +343,7 @@ function EthSide({ e }: { e: EthGovernance }) {
       {e.decisions.length === 0 ? (
         <Empty what="recorded decision" />
       ) : (
-        <Table label="Ethereum decisions">
+        <Table label={evmText("Ethereum decisions")}>
           <thead>
             <tr>
               <th className="num">
@@ -451,7 +455,7 @@ export function GovernancePage() {
       {q.data.ethereum ? (
         <EthSide e={q.data.ethereum} />
       ) : (
-        <Empty what="Ethereum governance snapshot" />
+        <Empty what={evmText("Ethereum governance snapshot")} />
       )}
     </>
   );

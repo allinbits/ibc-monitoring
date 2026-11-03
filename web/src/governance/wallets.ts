@@ -1,3 +1,4 @@
+import { evmChainId, evmText, network } from "../network";
 import { GNO_CHAIN, GNO_RPC, IBC_ADMIN } from "./catalog";
 import type { Transaction } from "./messages";
 import { decimal, MAX_UINT64, validGnoAddress } from "./validation";
@@ -67,7 +68,8 @@ export async function readAdenaAccount(): Promise<AdenaAccount> {
   if (!window.adena) throw new Error("Install the Adena extension, then reload this page.");
   const account = result(await window.adena.GetAccount());
   if (!validGnoAddress(account.address)) throw new Error("Adena returned an invalid gno address.");
-  if (account.chainId !== GNO_CHAIN) throw new Error("Use Connect Adena to switch to test-ibc-1.");
+  if (account.chainId !== GNO_CHAIN)
+    throw new Error(`Use Connect Adena to switch to ${GNO_CHAIN}.`);
   return account;
 }
 export async function connectAdena(): Promise<AdenaAccount> {
@@ -86,7 +88,7 @@ export async function connectAdena(): Promise<AdenaAccount> {
         () =>
           adena.AddNetwork({
             chainId: GNO_CHAIN,
-            chainName: "gno.land · test-ibc-1",
+            chainName: `gno.land · ${GNO_CHAIN}`,
             rpcUrl: GNO_RPC,
           }),
         ["NETWORK_ALREADY_EXISTS"],
@@ -139,11 +141,13 @@ export async function executeEthereum(
   expectedEpoch?: string,
 ): Promise<string> {
   executeCalldata(seq);
-  if ((await provider.request({ method: "eth_chainId" })) !== "0xaa36a7") {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(IBC_ADMIN) || BigInt(IBC_ADMIN) === 0n)
+    throw new Error("IBCAdmin is not configured for this route.");
+  if ((await provider.request({ method: "eth_chainId" })) !== evmChainId()) {
     try {
       await provider.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0xaa36a7" }],
+        params: [{ chainId: evmChainId() }],
       });
     } catch (error) {
       if ((error as { code?: number }).code !== 4902) throw error;
@@ -151,24 +155,24 @@ export async function executeEthereum(
         method: "wallet_addEthereumChain",
         params: [
           {
-            chainId: "0xaa36a7",
-            chainName: "Sepolia",
-            nativeCurrency: { name: "Sepolia Ether", symbol: "ETH", decimals: 18 },
-            rpcUrls: ["https://rpc.sepolia.ethpandaops.io"],
-            blockExplorerUrls: ["https://sepolia.etherscan.io"],
+            chainId: evmChainId(),
+            chainName: network.evm.network_name,
+            nativeCurrency: network.evm.native_currency,
+            rpcUrls: [network.evm.rpc_url],
+            blockExplorerUrls: [network.evm.explorer_url],
           },
         ],
       });
       await provider.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0xaa36a7" }],
+        params: [{ chainId: evmChainId() }],
       });
     }
   }
   const accounts = (await provider.request({ method: "eth_requestAccounts" })) as string[];
-  if (!accounts?.[0]) throw new Error("MetaMask did not share an Ethereum account.");
-  if ((await provider.request({ method: "eth_chainId" })) !== "0xaa36a7")
-    throw new Error("Switch MetaMask to Sepolia before continuing.");
+  if (!accounts?.[0]) throw new Error(evmText("MetaMask did not share an Ethereum account."));
+  if ((await provider.request({ method: "eth_chainId" })) !== evmChainId())
+    throw new Error(evmText("Switch MetaMask to Sepolia before continuing."));
   if (expectedEpoch !== undefined) {
     const epoch = await provider.request({
       method: "eth_call",
@@ -182,7 +186,7 @@ export async function executeEthereum(
       throw new Error("IBCAdmin changed epoch. Refresh governance before executing this sequence.");
   }
   const tx = ethereumTransaction(accounts[0], seq);
-  // Dry-run the exact call against the wallet's live Sepolia RPC before signing:
+  // Dry-run the exact call against the wallet's live RPC before signing:
   // this rejects a still-delayed, held, spent, or already executed decision.
   await provider.request({ method: "eth_call", params: [tx, "latest"] });
   const hash = await provider.request({ method: "eth_sendTransaction", params: [tx] });

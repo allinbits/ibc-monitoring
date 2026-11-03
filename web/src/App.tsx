@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loading } from "./components";
+import { network } from "./network";
 import { api } from "./api";
 import { OverviewPage } from "./pages/Overview";
 import { ClientsPage } from "./pages/Clients";
@@ -18,6 +20,22 @@ function initialTheme() {
 }
 
 export function App() {
+  const queryClient = useQueryClient();
+  const configuration = useQuery({
+    queryKey: ["info"],
+    queryFn: async () => {
+      const info = await api.info();
+      queryClient.setDefaultOptions({
+        queries: {
+          ...queryClient.getDefaultOptions().queries,
+          refetchInterval: info.network.poll_interval_ms,
+        },
+      });
+      return info;
+    },
+    staleTime: Infinity,
+    refetchInterval: false,
+  });
   const overview = useQuery({ queryKey: ["overview"], queryFn: api.overview });
   const info = overview.data?.info;
   const [theme, setTheme] = useState(initialTheme);
@@ -29,6 +47,8 @@ export function App() {
       /* Theme remains usable in memory. */
     }
   }, [theme]);
+  if (!configuration.data)
+    return <Loading error={configuration.error} retry={() => void configuration.refetch()} />;
   return (
     <div className="app wrap">
       <a className="skip-link" href="#main">
@@ -87,8 +107,8 @@ export function App() {
         <p>
           gno.land / IBC monitoring
           <br />
-          Snapshots refresh every 10 seconds. Governance actions use your connected wallet and live
-          RPC state.
+          Snapshots refresh every {network.poll_interval_ms / 1000} seconds. Governance actions use
+          your connected wallet and live RPC state.
         </p>
         {info && (
           <p>

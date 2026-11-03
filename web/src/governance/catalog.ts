@@ -1,3 +1,4 @@
+import { evmText, network } from "../network";
 import raw from "./catalog.json";
 
 export type Role = "governor" | "govdao" | "guardian" | "watch" | "anyone";
@@ -41,14 +42,8 @@ export interface Action {
   verified?: string;
 }
 
-export const GNO_RPC = "https://rpc.2-29-108-12.sslip.io";
-export const GNO_CHAIN = "test-ibc-1";
-export const GNOWEB = "https://gnoweb.2-29-108-12.sslip.io";
-export const GOV = "gno.land/r/aib/ibc/ibcgov";
-export const CORE = "gno.land/r/aib/ibc/core";
-export const TRANSFER = "gno.land/r/aib/ibc/apps/transfer";
+export { GNO_RPC, GNO_CHAIN, GNOWEB, GOV, CORE, TRANSFER, IBC_ADMIN } from "../network";
 export const DAO = "gno.land/r/gov/dao";
-export const IBC_ADMIN = raw.meta.live_state.ethereum.ibc_admin;
 export const CLOCKS = raw.meta.clocks_testnet;
 
 // Three direct-proposal templates omit params in the catalog. Reuse the
@@ -60,9 +55,48 @@ const supplemental: Record<string, string> = {
 };
 export const actions: Action[] = (raw.actions as Action[]).map((a) => ({
   ...a,
+  get title() {
+    return evmText(a.title);
+  },
+  get description() {
+    return evmText(a.description);
+  },
+  get pitfalls() {
+    return a.pitfalls
+      .filter((p) => network?.gno.client_type !== "arc" || !p.startsWith("Live mint denom "))
+      .map(evmText);
+  },
+  get timing() {
+    return {
+      ...a.timing,
+      notes: a.timing.notes && evmText(a.timing.notes),
+      ethereum: a.timing.ethereum && evmText(a.timing.ethereum),
+    };
+  },
+  get ethereum_followup() {
+    return (
+      a.ethereum_followup &&
+      evmText(
+        a.ethereum_followup
+          .split(raw.meta.live_state.ethereum.ibc_admin)
+          .join(network?.evm.admin_address ?? "IBCAdmin"),
+      )
+    );
+  },
+  get verified() {
+    return a.verified && evmText(a.verified);
+  },
   params: supplemental[a.id]
     ? raw.actions.find((b) => b.id === supplemental[a.id])!.params
-    : a.params,
+    : a.params.map((p) => ({
+        ...p,
+        get help() {
+          return evmText(p.help);
+        },
+        get validation() {
+          return evmText(p.validation);
+        },
+      })),
 }));
 export function actionById(id: string): Action {
   const action = actions.find((a) => a.id === id);

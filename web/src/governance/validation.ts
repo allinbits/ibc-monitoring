@@ -1,3 +1,4 @@
+import { evmText, network } from "../network";
 import { browserLimitation, type Action, type Param, type Role } from "./catalog";
 
 export const MAX_UINT256 = (1n << 256n) - 1n;
@@ -44,7 +45,7 @@ export interface ValidationContext {
 export type Values = Record<string, string>;
 
 function requireValue(ok: boolean, message: string): asserts ok {
-  if (!ok) throw new Error(message);
+  if (!ok) throw new Error(evmText(message));
 }
 export function decimal(value: string, max = MAX_UINT256, min = 0n): string {
   requireValue(/^[0-9]{1,78}$/.test(value), "Use decimal digits only, without spaces or signs.");
@@ -185,7 +186,7 @@ export function validateParam(
       "Use client-N or a custom router id (4–128 ASCII identifier characters).",
     );
     requireValue(
-      value !== ctx.route.client && !/^ethereum-[0-9]+$/.test(value),
+      value !== ctx.route.client && !/^(?:ethereum|arc)-[0-9]+$/.test(value),
       "Use the Ethereum router client, never the gno id ethereum-1.",
     );
     const custom =
@@ -291,7 +292,7 @@ export function validateParam(
       );
     else if (name === "toVersion")
       requireValue(
-        /^ethereum\/v[0-9]+$/.test(value),
+        new RegExp(`^${network.gno.client_type}/v[0-9]+$`).test(value),
         "Use an Ethereum verifier version, e.g. ethereum/v1.",
       );
     else if (name === "path" && a.id !== "eth.apply_epoch_notice") {

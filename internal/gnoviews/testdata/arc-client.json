@@ -1,0 +1,30 @@
+{
+  "id": "arc-1",
+  "type": "arc",
+  "creator": "g1relayer",
+  "status": "Active",
+  "counterparty_client_id": "client-0",
+  "client_state": {
+    "chain_id": "5042002",
+    "latest_height": {"revision_number": "0", "revision_height": "12345678"},
+    "is_frozen": false,
+    "trusting_period": "1209600",
+    "max_clock_drift": "90",
+    "trust_level_numerator": "1",
+    "trust_level_denominator": "3",
+    "registry_address": "AQID",
+    "registry_storage_location": "BAUG",
+    "registry_implementation": "BwgJ",
+    "ibc_contract_address": "CgsM",
+    "ibc_commitment_slot": "DQ4P"
+  },
+  "last_consensus_state": {
+    "height": {"revision_number": "0", "revision_height": "12345678"},
+    "timestamp": 1792600000,
+    "block_hash": "EBES",
+    "state_root": "ExQV",
+    "registry_storage_root": "FhcY",
+    "next_validators": [{"address": "GRob", "power": "9007199254740993"}],
+    "next_total_power": "9007199254740993"
+  }
+}

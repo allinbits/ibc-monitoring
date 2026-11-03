@@ -11,6 +11,10 @@ Ethereum contracts of gno-eth-ibc `feat/ibc-controls`
 ([`docs/controls.md`](https://github.com/allinbits/gno-eth-ibc/blob/feat/ibc-controls/docs/controls.md)).
 T6, the setup audit tool, is out of scope; §3.6 leaves it room.
 
+Arc route support and instance configuration are documented in [`arc.md`](arc.md).
+The Ethereum terminology below describes the original route; shared EVM readers
+also serve Arc, with client expiry derived from its BFT consensus timestamp.
+
 Status: design accepted as the basis for implementation; §12 tracks what is built. Where this document and the
 chains disagree, the chains are right and this document is wrong: fix it.
 

@@ -1,3 +1,4 @@
+import { evmText } from "../network";
 import { Label } from "../Help";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Alarm, type ChainState, type CheckResult, type Pins } from "../api";
@@ -27,8 +28,8 @@ function ChainError({ state, error }: { state?: ChainState; error?: string }) {
   if (state?.ok && state.verified && !state.complete) {
     return (
       <p className="error">
-        collection incomplete{state.incomplete ? `: ${state.incomplete}` : ""}; the route snapshots
-        are not fresh (clients and governance are)
+        collection incomplete{state.incomplete ? `: ${evmText(state.incomplete)}` : ""}; the route
+        snapshots are not fresh (clients and governance are)
       </p>
     );
   }
@@ -36,7 +37,7 @@ function ChainError({ state, error }: { state?: ChainState; error?: string }) {
     <p className="error">
       collection failed
       {state?.consecutive_failures ? ` ${state.consecutive_failures}× in a row` : ""}
-      {error ? `: ${error}` : ""}
+      {error ? `: ${evmText(error)}` : ""}
       {state?.last_success && (
         <span className="muted small">
           {" "}
@@ -84,7 +85,7 @@ function PinsCard({ pins }: { pins: Pins | null }) {
         )}
       </div>
       <div className="card">
-        <h3>Ethereum</h3>
+        <h3>{evmText("Ethereum")}</h3>
         {!pins.eth_state?.ok || !pins.eth_state?.verified || !pins.eth_state?.complete ? (
           <ChainError state={pins.eth_state} error={pins.eth_error} />
         ) : (
@@ -155,8 +156,8 @@ function Alarms({ alarms }: { alarms: Alarm[] }) {
               {a.autoflag && <Pill kind="bad">auto-flag eligible</Pill>}
             </td>
             <td>
-              <strong>{a.title}</strong>
-              {a.detail && <div className="muted small">{a.detail}</div>}
+              <strong>{evmText(a.title)}</strong>
+              {a.detail && <div className="muted small">{evmText(a.detail)}</div>}
               <div className="muted small">
                 {a.check} · <Id v={a.key} />
               </div>
@@ -211,7 +212,7 @@ function Checks({ checks }: { checks: CheckResult[] }) {
             </td>
             <td>
               <Pill kind={statusKind(c.status)}>{c.status}</Pill>
-              {c.reason && <div className="muted small">{c.reason}</div>}
+              {c.reason && <div className="muted small">{evmText(c.reason)}</div>}
               {c.consecutive_skips ? (
                 <div className="muted small">skipped {c.consecutive_skips}× in a row</div>
               ) : null}
@@ -259,7 +260,7 @@ export function OverviewPage() {
         </dl>
         <dl className="stat">
           <dt>
-            <Label>Ethereum verifiers</Label>
+            <Label term="ethereum verifiers">{evmText("Ethereum verifiers")}</Label>
           </dt>
           <dd>{o.counts.eth_clients ?? 0}</dd>
         </dl>

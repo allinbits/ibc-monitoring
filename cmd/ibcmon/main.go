@@ -125,6 +125,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 			return nil, err
 		}
 		rt.eth.HistoryFrom = cfg.Eth.HistoryFromBlock
+		rt.ethc.LogChunk = cfg.Eth.LogChunk
 		if cfg.Eth.RPCURL2 != "" {
 			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
 			if err != nil {
@@ -148,12 +149,13 @@ func loadAddresses(cfg *config.Config) (ethviews.Addresses, error) {
 			return ethviews.Addresses{}, err
 		}
 		var dep struct {
-			Router       string `json:"ics26Router"`
-			Transfer     string `json:"ics20Transfer"`
-			Admin        string `json:"ibcAdmin"`
-			Exec         string `json:"ibcAdminExec"`
-			LightClient  string `json:"gnoLightClient"`
-			UgnotVoucher string `json:"ugnotVoucher"`
+			DeployBlock  *uint64 `json:"deployBlock"`
+			Router       string  `json:"ics26Router"`
+			Transfer     string  `json:"ics20Transfer"`
+			Admin        string  `json:"ibcAdmin"`
+			Exec         string  `json:"ibcAdminExec"`
+			LightClient  string  `json:"gnoLightClient"`
+			UgnotVoucher string  `json:"ugnotVoucher"`
 		}
 		if err := json.Unmarshal(b, &dep); err != nil {
 			return ethviews.Addresses{}, fmt.Errorf("deployment file: %w", err)
@@ -162,6 +164,12 @@ func loadAddresses(cfg *config.Config) (ethviews.Addresses, error) {
 			if *dst == "" {
 				*dst = src
 			}
+		}
+		if cfg.Eth.HistoryFromDeployment && cfg.Eth.HistoryFromBlock == 0 {
+			if dep.DeployBlock == nil {
+				return ethviews.Addresses{}, errors.New("deployment file: deployBlock is required by eth.history_from_deployment")
+			}
+			cfg.Eth.HistoryFromBlock = *dep.DeployBlock
 		}
 		fill(&a.Router, dep.Router)
 		fill(&a.Transfer, dep.Transfer)
@@ -262,7 +270,7 @@ func runServe(args []string, withMonitor, withWorker bool) error {
 	withMonitor = withMonitor && !*noMonitor
 	withWorker = withWorker && !*noWorker && rt.cfg.Worker.Enabled
 
-	info := api.Info{Version: version, Public: rt.cfg.Instance.Public, StartedAt: time.Now().UTC(), GnoNode: rt.cfg.Gno.Name, EthNode: rt.cfg.Eth.Name, EthFinality: rt.cfg.Eth.Finality, AutoFlagRequested: "off", AutoFlagEffective: "off", Worker: withWorker}
+	info := api.Info{Network: rt.network(), Version: version, Public: rt.cfg.Instance.Public, StartedAt: time.Now().UTC(), GnoNode: rt.cfg.Gno.Name, EthNode: rt.cfg.Eth.Name, EthFinality: rt.cfg.Eth.Finality, AutoFlagRequested: "off", AutoFlagEffective: "off", Worker: withWorker}
 	if info.AutoFlagRequested, info.AutoFlagEffective, err = autoFlagStatus(rt.cfg.AutoFlag, os.Getenv); err != nil {
 		return err
 	}
@@ -344,4 +352,22 @@ func autoFlagStatus(cfg config.AutoFlag, getenv func(string) string) (requested,
 		return "", "", errors.New("autoflag.enabled needs IBCMON_GNO_WATCH_MNEMONIC and IBCMON_ETH_WATCH_PRIVATE_KEY in the environment (docs/design.md §8.4)")
 	}
 	return requested, "unavailable", nil
+}
+
+// network publishes the resolved deployment, never operator RPC URLs.
+func (rt *runtime) network() *api.Network {
+	g, e := rt.cfg.Gno, rt.cfg.Eth
+	paths := gnoviews.DefaultPaths
+	if g.PkgPaths.Core != "" {
+		paths = gnoviews.Paths{Core: g.PkgPaths.Core, Transfer: g.PkgPaths.Transfer, IBCGov: g.PkgPaths.IBCGov}
+	}
+	admin := ""
+	if rt.eth != nil {
+		admin = rt.eth.Addresses().Admin.Hex()
+	}
+	return &api.Network{
+		Gno:            api.GnoNetwork{ChainID: g.ChainID, RPCURL: g.BrowserRPCURL, WebURL: g.WebURL, RouteClientID: g.RouteClientID, ClientType: g.ClientType, Core: paths.Core, Transfer: paths.Transfer, IBCGov: paths.IBCGov},
+		EVM:            api.EVMNetwork{ChainID: e.ChainID, ChainName: e.ChainName, NetworkName: e.NetworkName, RPCURL: e.BrowserRPCURL, ExplorerURL: e.ExplorerURL, AdminAddress: admin, NativeCurrency: api.Currency{Name: e.NativeCurrency.Name, Symbol: e.NativeCurrency.Symbol, Decimals: e.NativeCurrency.Decimals}},
+		PollIntervalMS: rt.cfg.Monitor.PollInterval.Milliseconds(),
+	}
 }

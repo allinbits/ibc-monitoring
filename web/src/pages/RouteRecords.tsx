@@ -1,3 +1,4 @@
+import { evmText } from "../network";
 import type { ReactNode } from "react";
 import type { GnoRoute, RouteView } from "../api";
 import { Label } from "../Help";
@@ -383,7 +384,7 @@ export function Backing({ r }: { r: RouteView }) {
               <Label term="gno backing">gno.land</Label>
             </th>
             <th className="num">
-              <Label term="ethereum backing">Ethereum</Label>
+              <Label term="ethereum backing">{evmText("Ethereum")}</Label>
             </th>
           </tr>
         </thead>

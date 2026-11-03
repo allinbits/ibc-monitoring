@@ -1,3 +1,4 @@
+import { evmText, network } from "./network";
 import { actions } from "./governance/catalog";
 
 // Definitions adapted from the monitoring glossary; keep all help copy here.
@@ -680,5 +681,38 @@ const aliases: Record<string, string> = {
 
 export function glossaryText(term: string): string | undefined {
   const key = term.toLowerCase().trim();
-  return glossary[aliases[key] ?? key] ?? glossary[aliases[key.split("/")[0]] ?? key.split("/")[0]];
+  if (network?.gno.client_type === "arc") {
+    const arc: Record<string, string> = {
+      head: "The latest trusted execution block height for an Arc client on gno.land, or a gno.land block height for GnoLightClient.",
+      client:
+        "An Arc BFT light client on gno.land, or a GnoLightClient on the configured EVM chain.",
+      "chain id": `The followed chain: ${network.evm.chain_id} for Arc, ${network.gno.chain_id} for the GnoLightClient.`,
+      "height / block / slot":
+        "Arc clients count EVM block heights. Arc uses single-slot BFT finality and has no beacon chain or sync committees.",
+      "latest height (gno.land arc client)": "The latest trusted Arc execution block height.",
+      "eth head age (~13 min)":
+        "Arc finalizes in about one block (0.5 seconds). Freshness and provider lag limits come from this instance's YAML.",
+      "stale (pin)":
+        "The pin failed a configured head age, provider lag or progress bound. A stale pin is not evaluated.",
+      expiry:
+        "Arc expiry is the latest consensus state's timestamp plus trusting_period seconds. A frozen or expired client cannot verify proofs.",
+      "trusting period":
+        "The configured trust window, in seconds on Arc. Expiry is the last consensus timestamp plus this period.",
+      "next validators":
+        "The validator set carried by the latest Arc consensus state: its size and exact next_total_power. Powers are decimal strings.",
+      "registry storage root":
+        "The base64 registry_storage_root from the latest Arc consensus state. A changed root requires new validator-set storage proofs on an update.",
+      "max clock drift":
+        "Arc's maximum clock drift in seconds and trust-level numerator / denominator.",
+      "head / head_age_s / time_left_s / trusting_s":
+        "The trusted block height, head age, seconds until expiry and trusting period. Arc uses consensus timestamps, without slots or sync committees.",
+      "client expiry thresholds":
+        "Warning and critical expiry windows and the arc stale_after update window are configured in YAML.",
+    };
+    const specific = arc[aliases[key] ?? key];
+    if (specific) return specific;
+  }
+  const text =
+    glossary[aliases[key] ?? key] ?? glossary[aliases[key.split("/")[0]] ?? key.split("/")[0]];
+  return text && evmText(text);
 }

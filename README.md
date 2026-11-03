@@ -65,6 +65,13 @@ the source before anything is stored, logged or served; a public instance
 additionally drops node labels, error texts and worker logs from every
 response (design §10.2).
 
+## Arc instance
+
+The same binary also monitors **test-arc-1 ↔ Arc testnet**. Start from
+[`ibcmon.arc.example.yaml`](ibcmon.arc.example.yaml); see
+[`docs/arc.md`](docs/arc.md) for configuration, deployment and verification.
+The existing YAML keeps its Sepolia defaults.
+
 ## Layout
 
 | Path | What |

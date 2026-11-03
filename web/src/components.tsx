@@ -1,3 +1,4 @@
+import { evmText } from "./network";
 import { Label } from "./Help";
 import { useState, type ReactNode } from "react";
 import type { Provenance as Prov } from "./api";
@@ -9,7 +10,7 @@ export function PageHeading({ title, children }: { title: string; children?: Rea
   return (
     <div className="page-heading">
       <div>
-        <p className="eyebrow">GNO.LAND ↔ ETHEREUM</p>
+        <p className="eyebrow">GNO.LAND ↔ {evmText("Ethereum").toUpperCase()}</p>
         <h1>{title}</h1>
       </div>
       {children && <div className="page-meta">{children}</div>}
@@ -20,7 +21,7 @@ export function PageHeading({ title, children }: { title: string; children?: Rea
 /** Source details remain accessible on touch and keyboard as well as hover. */
 export function Provenance({ p }: { p: Prov | undefined }) {
   if (!p) return <span className="prov prov-missing">No provenance</span>;
-  const chain = p.chain === "gno" ? "gno.land" : "Ethereum";
+  const chain = p.chain === "gno" ? "gno.land" : evmText("Ethereum");
   return (
     <details className="prov-details">
       <summary

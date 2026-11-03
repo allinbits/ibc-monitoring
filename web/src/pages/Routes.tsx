@@ -1,3 +1,4 @@
+import { evmText } from "../network";
 import { Backing, RouteRecords } from "./RouteRecords";
 import { Label } from "../Help";
 import { useQuery } from "@tanstack/react-query";
@@ -60,7 +61,7 @@ function MeterBar({ level, cap }: { level?: string; cap?: string }) {
     <span
       className="bar"
       role="meter"
-      aria-label="Ethereum bucket capacity used"
+      aria-label={evmText("Ethereum bucket capacity used")}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={pct}
@@ -84,7 +85,7 @@ function GnoMeter({ m, decimals }: { m: Meter; decimals: number }) {
           <summary>
             <Label term="live level">Live level unavailable</Label>
           </summary>
-          {m.live_reason || "No exact source supplied."}
+          {evmText(m.live_reason || "No exact source supplied.")}
         </details>
       )}
       {m.epoch !== undefined && <Metric label="Payout epoch" v={m.epoch} />}
@@ -296,7 +297,7 @@ function EthSide({ e, denoms }: { e: EthRoute; denoms?: Denom[] }) {
   return (
     <div className="card">
       <div className="card-heading">
-        <h3>Ethereum</h3>
+        <h3>{evmText("Ethereum")}</h3>
         <Provenance p={e.provenance} />
       </div>
       <dl>
@@ -307,7 +308,7 @@ function EthSide({ e, denoms }: { e: EthRoute; denoms?: Denom[] }) {
           <Id v={e.route_key} /> / <Id v={e.current_client} />
           {e.incomplete?.map((what) => (
             <div key={what} className="notice error">
-              Incomplete: {what}
+              Incomplete: {evmText(what)}
             </div>
           ))}
           {e.migrations.map((m, i) => (
@@ -418,7 +419,7 @@ function EthSide({ e, denoms }: { e: EthRoute; denoms?: Denom[] }) {
       {e.limits.length === 0 ? (
         <Empty what="token limits" />
       ) : (
-        <Table label="Ethereum token limits">
+        <Table label={evmText("Ethereum token limits")}>
           <thead>
             <tr>
               <th>
@@ -553,17 +554,17 @@ function EthSide({ e, denoms }: { e: EthRoute; denoms?: Denom[] }) {
 function Relationship({ v }: { v: RelationshipView }) {
   return (
     <div className="card">
-      <h3>gno.land ↔ Ethereum relationship</h3>
+      <h3>{evmText("gno.land ↔ Ethereum relationship")}</h3>
       {v.deferred ? (
         <p className="muted">
           Deferred: one of the two bundles was not fresh at the last evaluation.
         </p>
       ) : (
         <p>
-          <Pill kind={v.mismatch ? "bad" : "ok"} title={v.detail}>
+          <Pill kind={v.mismatch ? "bad" : "ok"} title={v.detail && evmText(v.detail)}>
             {v.mismatch ? "gno.land disagrees" : "agree"}
           </Pill>{" "}
-          {v.title}
+          {v.title && evmText(v.title)}
         </p>
       )}
       <div className="small muted">
@@ -582,11 +583,15 @@ function RouteCard({ r }: { r: RouteView }) {
       <h2>
         Route <Id v={r.key} />
       </h2>
-      {r.gno ? <GnoSide r={r.gno} /> : <Empty what="gno.land route naming this Ethereum route" />}
+      {r.gno ? (
+        <GnoSide r={r.gno} />
+      ) : (
+        <Empty what={evmText("gno.land route naming this Ethereum route")} />
+      )}
       {r.ethereum ? (
         <EthSide e={r.ethereum} denoms={r.gno?.denoms} />
       ) : (
-        <Empty what="Ethereum snapshot" />
+        <Empty what={evmText("Ethereum snapshot")} />
       )}
       <Backing r={r} />
       {r.relationship && <Relationship v={r.relationship} />}
@@ -605,10 +610,9 @@ export function RoutesPage() {
         retry={() => void q.refetch()}
       />
       <p className="page-copy">
-        Stored meters are recorded at the last refill. Live gno.land levels appear only when
-        supplied by an exact source. Ethereum live levels come from limits(). Amounts use the API’s
-        display decimals and each Ethereum token’s own decimals. Unknown precision is shown in base
-        units.
+        {evmText(
+          "Stored meters are recorded at the last refill. Live gno.land levels appear only when supplied by an exact source. Ethereum live levels come from limits(). Amounts use the API’s display decimals and each Ethereum token’s own decimals. Unknown precision is shown in base units.",
+        )}
       </p>
       {!q.data ? (
         <Loading error={q.error} retry={() => void q.refetch()} />

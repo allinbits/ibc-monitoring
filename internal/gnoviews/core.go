@@ -118,6 +118,11 @@ func (v *Views) Client(ctx context.Context, id string, p Pin) (model.Client, err
 		if err := v.fillEthereum(&c, cj); err != nil {
 			return model.Client{}, fmt.Errorf("client %s: %w", id, err)
 		}
+	case "arc":
+		c.Kind = model.ClientKindArc
+		if err := v.fillArc(&c, cj); err != nil {
+			return model.Client{}, fmt.Errorf("client %s: %w", id, err)
+		}
 	case "tendermint":
 		c.Kind = model.ClientKindTendermint
 		if err := v.fillTendermint(&c, cj); err != nil {

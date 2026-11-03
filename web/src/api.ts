@@ -1,3 +1,4 @@
+import { configureNetwork, type Network } from "./network";
 // The typed client of ibcmon's read-only API (internal/api). Amounts arrive
 // as decimal strings and are parsed to bigint here; nothing in the console
 // turns an amount into a Number.
@@ -26,7 +27,7 @@ export interface Client {
   chain: Chain;
   id: string;
   address?: string;
-  kind: "ethereum" | "tendermint" | "gno-light-client";
+  kind: "arc" | "ethereum" | "tendermint" | "gno-light-client";
   status: string;
   role?: string;
   verifier_version?: string;
@@ -42,6 +43,21 @@ export interface Client {
   frozen: boolean;
   retired_for_transfer?: boolean;
   retired_for_gov?: boolean;
+  arc?: {
+    max_clock_drift: string;
+    trust_level_numerator: string;
+    trust_level_denominator: string;
+    registry_address: string;
+    registry_storage_location: string;
+    registry_implementation: string;
+    ibc_contract_address: string;
+    ibc_commitment_slot: string;
+    block_hash: string;
+    state_root: string;
+    registry_storage_root: string;
+    next_validators: { address: string; power: string }[];
+    next_total_power: string;
+  };
   provenance: Provenance;
 }
 
@@ -462,6 +478,7 @@ export interface Alarm {
 }
 
 export interface Info {
+  network: Network;
   version: string;
   public: boolean;
   started_at: string;
@@ -518,6 +535,11 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
+  info: async () => {
+    const info = await get<Info>("/api/v1/info");
+    configureNetwork(info.network);
+    return info;
+  },
   overview: () => get<Overview>("/api/v1/overview"),
   clients: () => get<{ gno: Client[]; ethereum: Client[] }>("/api/v1/clients"),
   routes: () => get<RouteView[]>("/api/v1/routes"),

@@ -21,8 +21,40 @@ import (
 //go:embed all:webdist
 var webdist embed.FS
 
+// Network contains only public browser settings. Private provider URLs stay server-side.
+type Network struct {
+	Gno            GnoNetwork `json:"gno"`
+	EVM            EVMNetwork `json:"evm"`
+	PollIntervalMS int64      `json:"poll_interval_ms"`
+}
+type GnoNetwork struct {
+	ChainID       string `json:"chain_id"`
+	RPCURL        string `json:"rpc_url"`
+	WebURL        string `json:"web_url"`
+	RouteClientID string `json:"route_client_id"`
+	ClientType    string `json:"client_type"`
+	Core          string `json:"core"`
+	Transfer      string `json:"transfer"`
+	IBCGov        string `json:"ibcgov"`
+}
+type EVMNetwork struct {
+	ChainID        string   `json:"chain_id"`
+	ChainName      string   `json:"chain_name"`
+	NetworkName    string   `json:"network_name"`
+	RPCURL         string   `json:"rpc_url"`
+	ExplorerURL    string   `json:"explorer_url"`
+	AdminAddress   string   `json:"admin_address"`
+	NativeCurrency Currency `json:"native_currency"`
+}
+type Currency struct {
+	Name     string `json:"name"`
+	Symbol   string `json:"symbol"`
+	Decimals uint8  `json:"decimals"`
+}
+
 // Info describes the instance to the console.
 type Info struct {
+	Network     *Network  `json:"network,omitempty"`
 	Version     string    `json:"version"`
 	Public      bool      `json:"public"`
 	StartedAt   time.Time `json:"started_at"`

@@ -1,10 +1,11 @@
+import { network, evmText } from "../network";
 import { CORE, DAO, GNO_CHAIN, GNO_RPC, GOV, TRANSFER, type Role } from "./catalog";
 import { goString, type RoleState } from "./messages";
 import { decimal, validGnoAddress, type ValidationContext } from "./validation";
 import type { GnoDecision, GnoDispatch } from "../api";
 
 export function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) return evmText(error.message);
   if (error && typeof error === "object" && "message" in error) return String(error.message);
   return String(error);
 }
@@ -166,7 +167,7 @@ export async function readLiveState(): Promise<LiveState> {
       evaluate(`${GOV}.Held()`).then(evalBool),
       evaluate(`${GOV}.HoldSince()`).then(evalInteger),
       render(GOV),
-      render(TRANSFER, "routes/ethereum-1"),
+      render(TRANSFER, `routes/${network.gno.route_client_id}`),
       readDecisions(),
       chainHead(),
     ]);

@@ -14,6 +14,12 @@ instance:
 gno:
   rpc_url: ${IBCMON_GNO_RPC_URL}
   rpc_url_2: ${IBCMON_GNO_RPC_URL_2}   # second provider: header agreement, and value agreement for integrity reads
+  # Browser settings default to the original Sepolia instance's gno testnet:
+  # chain_id: test-ibc-1
+  # browser_rpc_url: https://rpc.2-29-108-12.sslip.io
+  # web_url: https://gnoweb.2-29-108-12.sslip.io
+  # route_client_id: ethereum-1
+  # client_type: ethereum
   name: own-gno-node
   pkgpaths:
     core: gno.land/r/aib/ibc/core
@@ -24,6 +30,14 @@ eth:
   rpc_url: ${IBCMON_ETH_RPC_URL}
   rpc_url_2: ${IBCMON_ETH_RPC_URL_2}
   beacon_url: ${IBCMON_BEACON_URL}
+  # Public console/wallet settings (defaults shown; private RPC URLs are never served):
+  # chain_id: "11155111"
+  # chain_name: Ethereum
+  # network_name: Sepolia
+  # browser_rpc_url: https://rpc.sepolia.ethpandaops.io
+  # explorer_url: https://sepolia.etherscan.io
+  # native_currency: { name: Sepolia Ether, symbol: ETH, decimals: 18 }
+  log_chunk: 2000        # maximum blocks per eth_getLogs request
   finality: tag          # tag (finalized) | depth:N (local anvil) | latest (tests)
   light_client: false    # true when rpc_url is a Helios endpoint (docs/design.md §3.5)
   # Either list the addresses, or point at gno-eth-ibc's deployment file.

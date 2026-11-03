@@ -4,6 +4,7 @@
 !.env.example
 ibcmon.yaml
 ibcmon.local.yaml
+ibcmon.arc.yaml
 deployments/*.local.*
 
 # build output

@@ -30,6 +30,7 @@ func DefaultClientExpiryConfig() ClientExpiryConfig {
 		StaleAfter: map[model.ClientKind]time.Duration{
 			model.ClientKindGnoLightClient: 72 * time.Hour,
 			model.ClientKindEthereum:       24 * time.Hour,
+			model.ClientKindArc:            24 * time.Hour,
 			model.ClientKindTendermint:     72 * time.Hour,
 		},
 	}

@@ -300,16 +300,20 @@ func (c *Client) Logs(ctx context.Context, addr common.Address, topics [][]commo
 	if chunk == 0 {
 		chunk = 2000
 	}
-	for start := from; start <= to; start += chunk {
-		end := start + chunk - 1
-		if end > to {
-			end = to
+	for start := from; start <= to; {
+		end := to
+		if chunk-1 < to-start {
+			end = start + chunk - 1
 		}
 		logs, err := c.eth.FilterLogs(ctx, filterQuery(addr, topics, start, end))
 		if err != nil {
 			return nil, redactErr(fmt.Errorf("ethrpc %s: eth_getLogs %d-%d: %w", c.name, start, end, err))
 		}
 		out = append(out, logs...)
+		if end == to {
+			break
+		}
+		start = end + 1
 	}
 	return out, nil
 }

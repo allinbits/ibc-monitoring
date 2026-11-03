@@ -1,3 +1,4 @@
+import { network } from "../network";
 import { CORE, GOV, TRANSFER, type Action } from "./catalog";
 import { goString } from "./messages";
 import { evalBool, evalString, evaluate, type LiveState } from "./rpc";
@@ -29,6 +30,14 @@ export function defaultValues(
     if (["int", "uint32", "uint64", "uint256 decimal"].includes(p.type))
       value = /^[0-9]+(?= |$)/.exec(value)?.[0] ?? "";
     if (p.type === "hex" && value.includes(" ")) value = value.split(" ")[0];
+    if (network.gno.client_type === "arc") {
+      // Sepolia catalog samples are never deployment addresses for another route.
+      if (/^0x[0-9a-fA-F]{40}/.test(value) || p.type === "address" || value.startsWith("ibc/"))
+        value = "";
+      value = value.replace(/ethereum-/g, "arc-").replace(/ethereum\/v/g, "arc/v");
+    }
+    if (network.gno.client_type === "arc" && p.name === "token")
+      value = live.route.denoms.find((d) => d.denom === denom)?.remote || value;
     if (p.name === "route") value = live.route.route;
     if (p.type === "gno client id" && (p.default === "ethereum-1" || p.name === "clientID"))
       value = live.route.client;

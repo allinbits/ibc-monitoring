@@ -22,6 +22,10 @@ func TestClientExpiry(t *testing.T) {
 		alarm    bool
 	}{
 		{"active, fresh", mk("ethereum-1", model.ChainGno, model.ClientKindEthereum, model.ClientActive, now.Add(-1*time.Hour), 9*24*time.Hour), model.SeverityInfo, false},
+		{"Arc active", mk("arc-1", model.ChainGno, model.ClientKindArc, model.ClientActive, now.Add(-time.Second), 14*24*time.Hour), model.SeverityInfo, false},
+		{"Arc stale", mk("arc-1", model.ChainGno, model.ClientKindArc, model.ClientActive, now.Add(-25*time.Hour), 14*24*time.Hour), model.SeverityWarning, true},
+		{"Arc at expiry", mk("arc-1", model.ChainGno, model.ClientKindArc, model.ClientActive, now.Add(-14*24*time.Hour), 14*24*time.Hour), model.SeverityCritical, true},
+		{"Arc frozen", mk("arc-1", model.ChainGno, model.ClientKindArc, model.ClientFrozen, now, 14*24*time.Hour), model.SeverityCritical, true},
 		{"stale head", mk("ethereum-1", model.ChainGno, model.ClientKindEthereum, model.ClientActive, now.Add(-30*time.Hour), 9*24*time.Hour), model.SeverityWarning, true},
 		{"warn before expiry", mk("client-0", model.ChainEthereum, model.ClientKindGnoLightClient, model.ClientActive, now.Add(-12*24*time.Hour), 14*24*time.Hour), model.SeverityWarning, true},
 		{"critical before expiry", mk("client-0", model.ChainEthereum, model.ClientKindGnoLightClient, model.ClientActive, now.Add(-14*24*time.Hour+6*time.Hour), 14*24*time.Hour), model.SeverityCritical, true},

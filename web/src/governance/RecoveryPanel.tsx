@@ -1,3 +1,4 @@
+import { evmText, evmTxURL } from "../network";
 import type { EthRecovery } from "../api";
 import { Id, Pill } from "../components";
 import { Help, Label } from "../Help";
@@ -97,12 +98,8 @@ export function RecoveryPanel({ recovery: r }: { recovery: EthRecovery }) {
                   {r.disabled_by.epoch} · seq {r.disabled_by.seq} · block {r.disabled_by.block}
                   <div>
                     <Id v={r.disabled_by.tx} />{" "}
-                    <a
-                      href={`https://sepolia.etherscan.io/tx/${r.disabled_by.tx}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View on Sepolia Etherscan ↗
+                    <a href={evmTxURL(r.disabled_by.tx)} target="_blank" rel="noreferrer">
+                      {evmText("View on Sepolia Etherscan ↗")}
                     </a>
                   </div>
                 </>

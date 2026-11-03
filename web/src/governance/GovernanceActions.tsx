@@ -1,3 +1,4 @@
+import { evmText, evmTxURL, evmChainId } from "../network";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type EthDecision, type EthRoute, type GnoDecision } from "../api";
@@ -96,21 +97,21 @@ export function EthereumExecute({
   return (
     <div className="eth-followup">
       <div className="small">
-        Sepolia · IBCAdmin <code className="break-word">{IBC_ADMIN}</code> · epoch {epoch}, seq{" "}
-        {seq}
+        {evmText("Sepolia · IBCAdmin ")}
+        <code className="break-word">{IBC_ADMIN}</code> · epoch {epoch}, seq {seq}
       </div>
       <p className="small">
         After the relayer delivers the packet and IBCAdmin’s delay, anyone can call{" "}
-        <code>execute({seq})</code>. Ethereum may apply a cancellation or pure tightening at
-        recording.
+        <code>execute({seq})</code>
+        {evmText(". Ethereum may apply a cancellation or pure tightening at recording.")}
       </p>
       {provider && (
         <>
           <details className="tx-preview">
-            <summary>Preview Ethereum call</summary>
+            <summary>{evmText("Preview Ethereum call")}</summary>
             <pre>
               {JSON.stringify(
-                { chainId: "0xaa36a7", to: IBC_ADMIN, value: "0x0", data: executeCalldata(seq) },
+                { chainId: evmChainId(), to: IBC_ADMIN, value: "0x0", data: executeCalldata(seq) },
                 null,
                 2,
               )}
@@ -122,17 +123,19 @@ export function EthereumExecute({
             disabled={!ready || pending}
             onClick={() => void execute()}
           >
-            {pending ? "Check MetaMask…" : "Execute on Ethereum"}
+            {pending ? "Check MetaMask…" : evmText("Execute on Ethereum")}
           </button>
         </>
       )}
       {!provider && (
-        <p className="muted small">Connect MetaMask to this browser to execute on Ethereum.</p>
+        <p className="muted small">
+          {evmText("Connect MetaMask to this browser to execute on Ethereum.")}
+        </p>
       )}
       {hash && (
         <p role="status">
-          <a href={`https://sepolia.etherscan.io/tx/${hash}`} target="_blank" rel="noreferrer">
-            Ethereum transaction submitted ↗
+          <a href={evmTxURL(hash)} target="_blank" rel="noreferrer">
+            {evmText("Ethereum transaction submitted ↗")}
           </a>{" "}
           · check its receipt for the outcome.
         </p>
@@ -765,7 +768,7 @@ export function GovernanceActions() {
       <p className="muted small">
         Live wallet and action state from{" "}
         <a href={GNO_RPC} target="_blank" rel="noreferrer">
-          the test-ibc-1 RPC ↗
+          {evmText("the test-ibc-1 RPC ↗")}
         </a>
         . Adena simulates and sets the gas fee when you approve.
       </p>
@@ -871,7 +874,7 @@ export function GovernanceActions() {
                       }
                     >
                       <summary>
-                        {category} <span className="muted">{group.length}</span>
+                        {evmText(category)} <span className="muted">{group.length}</span>
                       </summary>
                       {group.map((a) => {
                         const availability = actionAvailability(
@@ -984,11 +987,13 @@ export function GovernanceActions() {
       />
       <section className="gov-followups">
         <h4>
-          Ethereum follow-ups <Help term="ethereum governance follow-up" />
+          {evmText("Ethereum follow-ups ")}
+          <Help term="ethereum governance follow-up" />
         </h4>
         <p className="small muted">
-          Kinds 1–14 dispatch when recorded on gno.land. Their Ethereum delay starts after delivery.
-          The Ethereum snapshot below shows maturity and execution controls.
+          {evmText(
+            "Kinds 1–14 dispatch when recorded on gno.land. Their Ethereum delay starts after delivery. The Ethereum snapshot below shows maturity and execution controls.",
+          )}
         </p>
         {live?.dispatches
           .slice()
@@ -1022,7 +1027,9 @@ export function GovernanceActions() {
             settle.
           </li>
           <li>
-            Reopen on both sides. Ethereum guardian flags and emergency recovery run on Ethereum.
+            {evmText(
+              "Reopen on both sides. Ethereum guardian flags and emergency recovery run on Ethereum.",
+            )}
           </li>
         </ol>
         <a href={`${GNOWEB}/r/${DAO.slice("gno.land/r/".length)}`} target="_blank" rel="noreferrer">

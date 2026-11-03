@@ -1,0 +1,72 @@
+# Second instance: test-arc-1 <-> Arc testnet. No beacon endpoint.
+# Copy to ibcmon.arc.yaml and set the independent gno provider in the environment.
+instance:
+  public: true
+  listen: ":8081"
+  data_dir: data-arc
+  history: 500
+  require_cross_check: true
+
+gno:
+  rpc_url: https://rpc-2.2-29-108-12.sslip.io
+  rpc_url_2: ${IBCMON_ARC_GNO_RPC_URL_2}
+  name: arc-gno-primary
+  name_2: arc-gno-second
+  chain_id: test-arc-1
+  browser_rpc_url: https://rpc-2.2-29-108-12.sslip.io
+  web_url: https://gnoweb-2.2-29-108-12.sslip.io
+  route_client_id: arc-1
+  client_type: arc
+  pkgpaths:
+    core: gno.land/r/aib/ibc/core
+    transfer: gno.land/r/aib/ibc/apps/transfer
+    ibcgov: gno.land/r/aib/ibc/ibcgov
+
+eth: # The shared EVM configuration block retains its existing name.
+  rpc_url: https://rpc.testnet.arc.io
+  rpc_url_2: https://rpc.blockdaemon.testnet.arc.io
+  name: arc-primary
+  name_2: arc-second
+  chain_id: "5042002"
+  chain_name: Arc testnet
+  network_name: Arc testnet
+  browser_rpc_url: https://rpc.testnet.arc.io
+  explorer_url: https://testnet.arcscan.app
+  native_currency: { name: USDC, symbol: USDC, decimals: 18 }
+  finality: tag
+  light_client: false
+  deployment_file: ../gno-eth-ibc-arc/contracts/deployments/5042002.json
+  history_from_deployment: true # use deployBlock; explicit history_from_block overrides it
+  log_chunk: 1000               # blocks per eth_getLogs request (~8 minutes)
+  # Addresses resolve from the deployment JSON; eth.addresses overrides individual entries.
+
+monitor:
+  poll_interval: 2s
+  deferred_alarm_failures: 6
+  request_timeout: 20s
+  collection_timeout: 60s
+  discovery_wait: 5s
+  freshness:
+    gno_max_head_age: 2m
+    ethereum_max_head_age: 30s   # shared EVM setting: Arc finalized is about one block old
+    gno_max_provider_lag: 20
+    ethereum_max_provider_lag: 20
+    head_stall_after: 1m
+  client_expiry:
+    warn_before: 24h
+    critical_before: 1h
+    stale_after:
+      arc: 5m
+      gno-light-client: 72h
+
+alerts:
+  sinks:
+    - type: log
+
+autoflag:
+  enabled: false
+  dry_run: true
+
+worker:
+  enabled: false
+  gno_eth_ibc_checkout: ../gno-eth-ibc-arc

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,24 +45,43 @@ func (i Instance) CrossCheckRequired() bool {
 	return i.RequireCrossCheck == nil || *i.RequireCrossCheck
 }
 
+// Browser endpoints are explicitly public and are never copied from private RPC URLs.
 type Gno struct {
-	RPCURL   string `yaml:"rpc_url"`
-	RPCURL2  string `yaml:"rpc_url_2"`
-	Name     string `yaml:"name"`
-	Name2    string `yaml:"name_2"`
-	PkgPaths struct {
+	ChainID       string `yaml:"chain_id" json:"chain_id"`
+	BrowserRPCURL string `yaml:"browser_rpc_url" json:"rpc_url"`
+	WebURL        string `yaml:"web_url" json:"web_url"`
+	RouteClientID string `yaml:"route_client_id" json:"route_client_id"`
+	ClientType    string `yaml:"client_type" json:"client_type"`
+	RPCURL        string `yaml:"rpc_url"`
+	RPCURL2       string `yaml:"rpc_url_2"`
+	Name          string `yaml:"name"`
+	Name2         string `yaml:"name_2"`
+	PkgPaths      struct {
 		Core     string `yaml:"core"`
 		Transfer string `yaml:"transfer"`
 		IBCGov   string `yaml:"ibcgov"`
 	} `yaml:"pkgpaths"`
 }
 
+type NativeCurrency struct {
+	Name     string `yaml:"name" json:"name"`
+	Symbol   string `yaml:"symbol" json:"symbol"`
+	Decimals uint8  `yaml:"decimals" json:"decimals"`
+}
+
 type Eth struct {
-	RPCURL    string `yaml:"rpc_url"`
-	RPCURL2   string `yaml:"rpc_url_2"`
-	Name      string `yaml:"name"`
-	Name2     string `yaml:"name_2"`
-	BeaconURL string `yaml:"beacon_url"`
+	ChainID        string         `yaml:"chain_id"`
+	ChainName      string         `yaml:"chain_name"`
+	NetworkName    string         `yaml:"network_name"`
+	ExplorerURL    string         `yaml:"explorer_url"`
+	BrowserRPCURL  string         `yaml:"browser_rpc_url"`
+	NativeCurrency NativeCurrency `yaml:"native_currency"`
+	LogChunk       uint64         `yaml:"log_chunk"`
+	RPCURL         string         `yaml:"rpc_url"`
+	RPCURL2        string         `yaml:"rpc_url_2"`
+	Name           string         `yaml:"name"`
+	Name2          string         `yaml:"name_2"`
+	BeaconURL      string         `yaml:"beacon_url"`
 	// Finality: "tag" (finalized), "depth:N" or "latest".
 	Finality string `yaml:"finality"`
 	// LightClient is true when rpc_url is a Helios (or equivalent) endpoint.
@@ -79,6 +100,8 @@ type Eth struct {
 	// HistoryFromBlock is the transfer proxy's deployment block, where the
 	// route history (GnoRouteMigrated) is read from.
 	HistoryFromBlock uint64 `yaml:"history_from_block"`
+	// HistoryFromDeployment uses deployBlock from deployment_file when no explicit start is set.
+	HistoryFromDeployment bool `yaml:"history_from_deployment"`
 }
 
 type Monitor struct {
@@ -193,6 +216,45 @@ func (c *Config) defaults() {
 	if c.Eth.Name2 == "" {
 		c.Eth.Name2 = "eth-second"
 	}
+	if c.Gno.ChainID == "" {
+		c.Gno.ChainID = "test-ibc-1"
+	}
+	if c.Gno.BrowserRPCURL == "" {
+		c.Gno.BrowserRPCURL = "https://rpc.2-29-108-12.sslip.io"
+	}
+	if c.Gno.WebURL == "" {
+		c.Gno.WebURL = "https://gnoweb.2-29-108-12.sslip.io"
+	}
+	if c.Gno.ClientType == "" {
+		c.Gno.ClientType = "ethereum"
+	}
+	if c.Gno.RouteClientID == "" {
+		c.Gno.RouteClientID = c.Gno.ClientType + "-1"
+	}
+	if c.Eth.ChainID == "" {
+		c.Eth.ChainID = "11155111"
+	}
+	if c.Eth.ChainName == "" {
+		c.Eth.ChainName = "Ethereum"
+	}
+	if c.Eth.NetworkName == "" {
+		c.Eth.NetworkName = c.Eth.ChainName
+		if c.Eth.ChainName == "Ethereum" {
+			c.Eth.NetworkName = "Sepolia"
+		}
+	}
+	if c.Eth.ExplorerURL == "" {
+		c.Eth.ExplorerURL = "https://sepolia.etherscan.io"
+	}
+	if c.Eth.BrowserRPCURL == "" {
+		c.Eth.BrowserRPCURL = "https://rpc.sepolia.ethpandaops.io"
+	}
+	if c.Eth.NativeCurrency.Name == "" {
+		c.Eth.NativeCurrency = NativeCurrency{Name: "Sepolia Ether", Symbol: "ETH", Decimals: 18}
+	}
+	if c.Eth.LogChunk == 0 {
+		c.Eth.LogChunk = 2000
+	}
 	if c.Eth.Finality == "" {
 		c.Eth.Finality = "tag"
 	}
@@ -245,6 +307,18 @@ func (c *Config) defaults() {
 }
 
 func (c *Config) validate() error {
+	if id, err := strconv.ParseUint(c.Eth.ChainID, 10, 64); err != nil || id == 0 {
+		return errors.New("config: eth.chain_id must be a positive decimal uint64")
+	}
+	if c.Gno.ClientType != "ethereum" && c.Gno.ClientType != "arc" {
+		return errors.New("config: gno.client_type must be ethereum or arc")
+	}
+	for _, endpoint := range []string{c.Gno.BrowserRPCURL, c.Gno.WebURL, c.Eth.BrowserRPCURL, c.Eth.ExplorerURL} {
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("config: browser URLs must be public HTTP(S) URLs without credentials, query or fragment")
+		}
+	}
 	if c.AutoFlag.Enabled && c.Instance.Public {
 		return errors.New("config: autoflag cannot be enabled on a public instance")
 	}
