@@ -39,6 +39,7 @@ type Views struct {
 	erc20       *gethabi.ABI
 	exec        *gethabi.ABI
 	router      *gethabi.ABI
+	logs        logCache
 }
 
 // New returns views over rpc.

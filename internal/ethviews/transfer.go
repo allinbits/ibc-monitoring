@@ -85,7 +85,7 @@ func (v *Views) Discover(ctx context.Context, clientID string, b ethrpc.Block) (
 	if !ok {
 		return d, fmt.Errorf("transfer ABI has no GnoRouteMigrated event")
 	}
-	logs, err := v.rpc.Logs(ctx, x, [][]common.Hash{{ev.ID}}, v.HistoryFrom, b.Number)
+	logs, err := v.historyLogs(ctx, x, [][]common.Hash{{ev.ID}}, b)
 	if err != nil {
 		return d, err
 	}

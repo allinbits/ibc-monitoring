@@ -301,7 +301,7 @@ func (v *Views) recoveryDisable(ctx context.Context, b ethrpc.Block) (*model.Eth
 	if !ok {
 		return nil, fmt.Errorf("admin ABI has no EmergencyRecoveryDisabled event")
 	}
-	logs, err := v.rpc.Logs(ctx, v.addrs.Admin, [][]common.Hash{{ev.ID}}, v.HistoryFrom, b.Number)
+	logs, err := v.historyLogs(ctx, v.addrs.Admin, [][]common.Hash{{ev.ID}}, b)
 	if err != nil {
 		return nil, err
 	}
