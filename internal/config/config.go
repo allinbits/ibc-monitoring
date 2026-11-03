@@ -77,11 +77,14 @@ type Eth struct {
 	BrowserRPCURL  string         `yaml:"browser_rpc_url"`
 	NativeCurrency NativeCurrency `yaml:"native_currency"`
 	LogChunk       uint64         `yaml:"log_chunk"`
-	RPCURL         string         `yaml:"rpc_url"`
-	RPCURL2        string         `yaml:"rpc_url_2"`
-	Name           string         `yaml:"name"`
-	Name2          string         `yaml:"name_2"`
-	BeaconURL      string         `yaml:"beacon_url"`
+	// MaxRPS spaces each EVM provider's requests at most this many a second
+	// and retries its HTTP 429 answers with a backoff (0: unthrottled).
+	MaxRPS    float64 `yaml:"max_rps"`
+	RPCURL    string  `yaml:"rpc_url"`
+	RPCURL2   string  `yaml:"rpc_url_2"`
+	Name      string  `yaml:"name"`
+	Name2     string  `yaml:"name_2"`
+	BeaconURL string  `yaml:"beacon_url"`
 	// Finality: "tag" (finalized), "depth:N" or "latest".
 	Finality string `yaml:"finality"`
 	// LightClient is true when rpc_url is a Helios (or equivalent) endpoint.

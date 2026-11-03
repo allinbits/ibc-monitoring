@@ -38,6 +38,7 @@ eth: # The shared EVM configuration block retains its existing name.
   deployment_file: ../gno-eth-ibc-arc/contracts/deployments/5042002.json
   history_from_deployment: true # use deployBlock; explicit history_from_block overrides it
   log_chunk: 1000               # blocks per eth_getLogs request (~8 minutes)
+  max_rps: 5                    # Arc's official RPC rate-limits bursts; 429s are retried
   # Addresses resolve from the deployment JSON; eth.addresses overrides individual entries.
 
 monitor:

@@ -112,7 +112,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 		if err != nil {
 			return nil, err
 		}
-		rt.ethc, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL, cfg.Eth.Name, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
+		rt.ethc, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL, cfg.Eth.Name, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout), ethrpc.WithMaxRPS(cfg.Eth.MaxRPS))
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +127,7 @@ func setup(ctx context.Context, configPath string) (*runtime, error) {
 		rt.eth.HistoryFrom = cfg.Eth.HistoryFromBlock
 		rt.ethc.LogChunk = cfg.Eth.LogChunk
 		if cfg.Eth.RPCURL2 != "" {
-			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout))
+			rt.eth2, err = ethrpc.Dial(ctx, cfg.Eth.RPCURL2, cfg.Eth.Name2, fin, ethrpc.WithRequestTimeout(cfg.Monitor.RequestTimeout), ethrpc.WithMaxRPS(cfg.Eth.MaxRPS))
 			if err != nil {
 				return nil, err
 			}

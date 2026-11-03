@@ -72,6 +72,7 @@ type DialOption func(*dialConfig)
 
 type dialConfig struct {
 	requestTimeout time.Duration
+	maxRPS         float64
 }
 
 // WithRequestTimeout bounds every request over HTTP (docs/design.md §7.11):
@@ -88,8 +89,12 @@ func Dial(ctx context.Context, url, name string, fin Finality, opts ...DialOptio
 		o(&dc)
 	}
 	var ropts []rpc.ClientOption
-	if dc.requestTimeout > 0 {
-		ropts = append(ropts, rpc.WithHTTPClient(&http.Client{Timeout: dc.requestTimeout}))
+	if dc.requestTimeout > 0 || dc.maxRPS > 0 {
+		hc := &http.Client{Timeout: dc.requestTimeout}
+		if dc.maxRPS > 0 {
+			hc.Transport = &throttle{next: http.DefaultTransport, interval: time.Duration(float64(time.Second) / dc.maxRPS), backoff: time.Second}
+		}
+		ropts = append(ropts, rpc.WithHTTPClient(hc))
 	}
 	rc, err := rpc.DialOptions(ctx, url, ropts...)
 	if err != nil {
