@@ -92,7 +92,8 @@ func Dial(ctx context.Context, url, name string, fin Finality, opts ...DialOptio
 	if dc.requestTimeout > 0 || dc.maxRPS > 0 {
 		hc := &http.Client{Timeout: dc.requestTimeout}
 		if dc.maxRPS > 0 {
-			hc.Transport = &throttle{next: http.DefaultTransport, interval: time.Duration(float64(time.Second) / dc.maxRPS), backoff: time.Second}
+			// A third of the request's budget per attempt: room for two retries.
+			hc.Transport = &throttle{next: http.DefaultTransport, interval: time.Duration(float64(time.Second) / dc.maxRPS), backoff: time.Second, attempt: dc.requestTimeout / 3}
 		}
 		ropts = append(ropts, rpc.WithHTTPClient(hc))
 	}
