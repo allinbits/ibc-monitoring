@@ -73,15 +73,34 @@ func (v *Views) historyLogs(ctx context.Context, addr common.Address, topics [][
 		}
 		return out, nil
 	}
-	fresh, err := v.rpc.Logs(ctx, addr, topics, start, b.Number)
-	if err != nil {
-		return nil, err
+	// Chunk by chunk, each kept as it arrives: a backlog longer than one
+	// collection's deadline is worked off over several collections instead
+	// of failing every one of them from the start again.
+	chunk := v.rpc.LogChunk
+	if chunk == 0 {
+		chunk = 2000
 	}
-	v.logs.mu.Lock()
-	defer v.logs.mu.Unlock()
-	if s.to == start-1 { // no concurrent scan extended it meanwhile
+	for {
+		end := b.Number
+		if chunk-1 < end-start {
+			end = start + chunk - 1
+		}
+		fresh, err := v.rpc.Logs(ctx, addr, topics, start, end)
+		if err != nil {
+			return nil, err
+		}
+		v.logs.mu.Lock()
+		if s.to != start-1 { // a concurrent scan moved it: start over from it
+			v.logs.mu.Unlock()
+			return v.historyLogs(ctx, addr, topics, b)
+		}
 		s.logs = append(s.logs[:len(s.logs):len(s.logs)], fresh...)
-		s.to = b.Number
+		s.to = end
+		logs = s.logs
+		v.logs.mu.Unlock()
+		if end == b.Number {
+			return logs, nil
+		}
+		start = end + 1
 	}
-	return append(logs[:len(logs):len(logs)], fresh...), nil
 }
