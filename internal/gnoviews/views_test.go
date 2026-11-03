@@ -381,3 +381,30 @@ func TestExpiryWithNonZeroGenesisSlot(t *testing.T) {
 	}
 	t.Fatal("no ethereum client parsed")
 }
+
+// TestDecisionsPaged reads the ledger as later ibcgov versions render it:
+// pages of {"entries", "next"}, followed through decisions?from=N.
+func TestDecisionsPaged(t *testing.T) {
+	v, pin, srv := devnet(t)
+	all, err := v.Decisions(context.Background(), pin)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("bare ledger: %d decisions, %v", len(all), err)
+	}
+	entry := func(i int) string {
+		bz, err := json.Marshal(map[string]any{"id": all[i].ID, "kind": all[i].Kind, "text": all[i].Text, "state": all[i].State,
+			"made": all[i].Made, "recorded": all[i].Recorded, "due": all[i].Due, "applied": all[i].Applied, "cancelled": all[i].Cancelled, "note": all[i].Note})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(bz)
+	}
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/ibcgov:decisions", `{"entries":[`+entry(0)+","+entry(1)+`],"next":3}`)
+	srv.Set("vm/qrender|gno.land/r/aib/ibc/ibcgov:decisions?from=3", `{"entries":[`+entry(2)+`],"next":0}`)
+	paged, err := v.Decisions(context.Background(), pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paged) != 3 || paged[2].ID != all[2].ID || paged[1].Note != all[1].Note {
+		t.Fatalf("paged ledger: %+v", paged)
+	}
+}

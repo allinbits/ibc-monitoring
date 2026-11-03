@@ -151,9 +151,27 @@ export interface LiveState extends ValidationContext {
   chainTime: number;
   readAt: number;
 }
+// The ledger is a bare array on the first ibcgov versions and pages of
+// {entries, next} on later ones (decisions?from=N, next 0 at the end).
+const MAX_DECISION_PAGES = 1000;
 export async function readDecisions(): Promise<GnoDecision[]> {
-  const rows = parseJson<GnoDecision[]>(await render(GOV, "decisions"));
-  if (!Array.isArray(rows)) throw new Error("Unexpected decisions ledger response.");
+  const first = parseJson<unknown>(await render(GOV, "decisions"));
+  let rows: GnoDecision[];
+  if (Array.isArray(first)) {
+    rows = first as GnoDecision[];
+  } else {
+    rows = [];
+    let page = first as { entries?: unknown; next?: unknown };
+    for (let i = 0; ; i++) {
+      if (!page || typeof page !== "object" || !Array.isArray(page.entries) || i >= MAX_DECISION_PAGES) {
+        throw new Error("Unexpected decisions ledger response.");
+      }
+      rows.push(...(page.entries as GnoDecision[]));
+      const next = decimal(String(page.next ?? "0"), (1n << 63n) - 1n);
+      if (next === "0") break;
+      page = parseJson<{ entries?: unknown; next?: unknown }>(await render(GOV, `decisions?from=${next}`));
+    }
+  }
   return rows.map((d) => ({ ...d, id: decimal(String(d.id), (1n << 63n) - 1n, 1n) }));
 }
 export async function readLiveState(): Promise<LiveState> {

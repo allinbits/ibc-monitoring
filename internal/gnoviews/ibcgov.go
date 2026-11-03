@@ -164,10 +164,57 @@ func addressOf(raw string) string {
 	return s
 }
 
+// decisionsPage is a page of the ledger as later ibcgov versions render it:
+// up to 100 decisions from a number on, and the next page's first number (0
+// at the end).
+type decisionsPage struct {
+	Entries []decisionJSON `json:"entries"`
+	Next    json.Number    `json:"next"`
+}
+
+// maxDecisionPages bounds a ledger read (100 decisions a page).
+const maxDecisionPages = 1000
+
+// ledger reads every decision, from either render: the bare array of the
+// first ibcgov versions, or the pages (decisions?from=N) of later ones.
+func (v *Views) ledger(ctx context.Context, p Pin) ([]decisionJSON, error) {
+	var raw json.RawMessage
+	if err := v.renderJSON(ctx, v.paths.IBCGov, "decisions", p, &raw); err != nil {
+		return nil, err
+	}
+	if t := strings.TrimSpace(string(raw)); strings.HasPrefix(t, "[") {
+		var djs []decisionJSON
+		if err := json.Unmarshal(raw, &djs); err != nil {
+			return nil, fmt.Errorf("ibcgov:decisions: decode: %w", err)
+		}
+		return djs, nil
+	}
+	var all []decisionJSON
+	for i := 0; i < maxDecisionPages; i++ {
+		var page decisionsPage
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, fmt.Errorf("ibcgov:decisions: decode: %w", err)
+		}
+		all = append(all, page.Entries...)
+		next, err := unum(page.Next)
+		if err != nil {
+			return nil, fmt.Errorf("ibcgov:decisions: next page: %w", err)
+		}
+		if next == 0 {
+			return all, nil
+		}
+		raw = nil
+		if err := v.renderJSON(ctx, v.paths.IBCGov, "decisions?from="+strconv.FormatUint(next, 10), p, &raw); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("ibcgov:decisions: more than %d pages", maxDecisionPages)
+}
+
 // Decisions reads the whole ledger (Render("decisions"), oldest first).
 func (v *Views) Decisions(ctx context.Context, p Pin) ([]model.GnoDecision, error) {
-	var djs []decisionJSON
-	if err := v.renderJSON(ctx, v.paths.IBCGov, "decisions", p, &djs); err != nil {
+	djs, err := v.ledger(ctx, p)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]model.GnoDecision, 0, len(djs))
