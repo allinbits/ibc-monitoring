@@ -5,6 +5,10 @@
 instance:
   public: false          # true: read-only public mode with the non-authoritative banner
   listen: ":8080"
+  # Origins of an ibc-monitoring-ui console on another origin that may read
+  # the API. Leave empty when a reverse proxy serves the console and /api/
+  # from one origin (README, "The console").
+  # cors_origins: ["https://monitor.example"]
   history: 500           # results kept per check
   # Header agreement fails closed (docs/design.md §3.3): every chain needs a
   # second provider, or the start-up is refused. Only the local e2e target

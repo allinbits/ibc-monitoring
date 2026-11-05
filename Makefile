@@ -1,52 +1,33 @@
 GO       ?= go
-PNPM     ?= pnpm
 BIN      ?= bin/ibcmon
-WEBDIST  := internal/api/webdist
 
-.PHONY: all build build-go build-web test test-go test-web lint lint-go lint-web fmt tidy run clean abis e2e
+.PHONY: all build test lint fmt tidy run clean abis e2e
 
 all: build
 
-build: build-web build-go
-
-build-go:
+# The binary serves the API only; the console is the separate
+# ibc-monitoring-ui app.
+build:
 	$(GO) build -o $(BIN) ./cmd/ibcmon
 
-# The console is built into internal/api/webdist and embedded in the binary.
-build-web:
-	cd web && $(PNPM) install --frozen-lockfile && $(PNPM) build
-	rm -rf $(WEBDIST)/assets $(WEBDIST)/index.html
-	cp -R web/dist/. $(WEBDIST)/
-
-test: test-go test-web
-
-test-go:
+test:
 	$(GO) test -race -count=1 ./...
 
-test-web:
-	cd web && $(PNPM) test
-
-lint: lint-go lint-web
-
-lint-go:
+lint:
 	$(GO) vet ./...
 	golangci-lint run ./...
 
-lint-web:
-	cd web && $(PNPM) lint
-
 fmt:
 	gofmt -w $$(git ls-files '*.go')
-	cd web && $(PNPM) exec prettier --write src
 
 tidy:
 	$(GO) mod tidy
 
-run: build-go
+run: build
 	$(BIN) serve --config ibcmon.yaml
 
 clean:
-	rm -rf bin web/dist $(WEBDIST)/assets $(WEBDIST)/index.html
+	rm -rf bin
 
 # Refreshes abi/*.json from a Foundry build of gno-eth-ibc (contracts/out).
 # GNO_ETH_IBC points at the checkout; run `make build` there first.
@@ -56,5 +37,5 @@ abis:
 
 # Runs every check once against the local testnet + anvil of gno-eth-ibc
 # (scripts/e2e-local.sh there). See docs/design.md §13.
-e2e: build-go
+e2e: build
 	./scripts/e2e-local.sh

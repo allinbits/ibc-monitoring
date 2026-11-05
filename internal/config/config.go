@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,9 +30,14 @@ type Config struct {
 
 type Instance struct {
 	// Public enables the non-authoritative, read-only public mode (§3.4).
-	Public  bool   `yaml:"public"`
-	Listen  string `yaml:"listen"`
-	DataDir string `yaml:"data_dir"`
+	Public bool   `yaml:"public"`
+	Listen string `yaml:"listen"`
+	// CORSOrigins lists the origins of the console (ibc-monitoring-ui) that
+	// may read the API from another origin, e.g. "https://monitor.example".
+	// Empty (the default): same origin only, the console being served
+	// beside the API by a reverse proxy (docs/design.md §10.2).
+	CORSOrigins []string `yaml:"cors_origins"`
+	DataDir     string   `yaml:"data_dir"`
 	// History is how many results per check the store keeps.
 	History int `yaml:"history"`
 	// RequireCrossCheck (default true) refuses a chain without a second
@@ -245,6 +253,13 @@ func (c *Config) defaults() {
 }
 
 func (c *Config) validate() error {
+	for i, o := range c.Instance.CORSOrigins {
+		canon, err := canonicalOrigin(o)
+		if err != nil {
+			return fmt.Errorf("config: instance.cors_origins: %w", err)
+		}
+		c.Instance.CORSOrigins[i] = canon
+	}
 	if c.AutoFlag.Enabled && c.Instance.Public {
 		return errors.New("config: autoflag cannot be enabled on a public instance")
 	}
@@ -268,4 +283,67 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// canonicalOrigin accepts a bare http(s) origin: scheme and host, an
+// optional port, nothing else. A wildcard is refused: an operator instance
+// serves data that only its console should read. It returns the origin as a
+// browser serializes it in the Origin header (lower-case, default port
+// dropped, IPv6 compressed, port without leading zeros), so that the API's
+// exact comparison matches. Forms a browser would rewrite in ways this
+// cannot reproduce exactly are refused rather than silently never matching:
+// a Unicode host (write it in punycode, xn--…), an IPv4-mapped IPv6 address
+// and an IPv4 address in a shorthand or zero-padded form.
+func canonicalOrigin(o string) (string, error) {
+	bad := fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
+	u, err := url.Parse(o)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || strings.Contains(u.Host, "*") ||
+		u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.HasSuffix(o, "?") || strings.HasSuffix(o, "#") {
+		return "", bad
+	}
+	// Checked before lower-casing: Unicode case folding can turn a
+	// non-ASCII host into a different ASCII one (U+0130 İ → i).
+	for _, r := range u.Hostname() {
+		if r > 0x7f {
+			return "", fmt.Errorf("%q: write the host in punycode (xn--…), as browsers send it", o)
+		}
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip, err := netip.ParseAddr(host); err == nil {
+		switch {
+		case ip.Zone() != "" || ip.Is4In6():
+			return "", bad
+		case ip.Is6():
+			host = "[" + ip.String() + "]"
+		}
+	} else if strings.HasPrefix(u.Host, "[") || endsInNumber(host) {
+		// A bracketed non-address, or a host the URL standard parses as IPv4
+		// but netip refuses (127.1, 010.0.0.1, 0x7f.0.0.1, 127.0.0.1.):
+		// browsers rewrite these, so refuse them.
+		return "", bad
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return "", bad
+		}
+		if defaultPort := (u.Scheme == "https" && n == 443) || (u.Scheme == "http" && n == 80); !defaultPort {
+			host += ":" + strconv.Itoa(n)
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return "", bad
+	}
+	return u.Scheme + "://" + host, nil
+}
+
+// endsInNumber reports whether the URL standard treats host as an IPv4
+// address: its last label (ignoring one trailing dot) is decimal digits or
+// 0x followed by hex digits.
+func endsInNumber(host string) bool {
+	labels := strings.Split(strings.TrimSuffix(host, "."), ".")
+	last := labels[len(labels)-1]
+	if hex, ok := strings.CutPrefix(last, "0x"); ok {
+		return strings.Trim(hex, "0123456789abcdef") == ""
+	}
+	return last != "" && strings.Trim(last, "0123456789") == ""
 }

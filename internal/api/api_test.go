@@ -122,15 +122,62 @@ func TestAPI(t *testing.T) {
 	if code != 404 {
 		t.Fatalf("unknown api path %d", code)
 	}
-	// The root serves the console when it is built in, else a notice; either
-	// way it is never a 404 (SPA fallback).
+	// The binary serves no console: the root says where the API is, and
+	// every other path outside the API is a 404.
 	code, body = get("/")
-	served := strings.Contains(body, "not built") || strings.Contains(body, `<div id="root">`)
-	if code != 200 || !served {
+	if code != 200 || !strings.Contains(body, "/api/v1/") {
 		t.Fatalf("root %d %s", code, body)
 	}
-	if code, _ = get("/clients"); code != 200 {
-		t.Fatalf("spa fallback %d", code)
+	if code, _ = get("/clients"); code != 404 {
+		t.Fatalf("console path %d", code)
+	}
+}
+
+// Only the configured console origins may read the API cross-origin, and a
+// preflight from any other origin gets no CORS headers.
+func TestCORS(t *testing.T) {
+	srv := httptest.NewServer((&Server{Store: store.NewMemory(10), CORSOrigins: []string{"https://console.example"}}).Handler())
+	defer srv.Close()
+	do := func(method, origin string) *http.Response {
+		req, _ := http.NewRequest(method, srv.URL+"/api/v1/info", nil)
+		req.Header.Set("Origin", origin)
+		if method == http.MethodOptions {
+			req.Header.Set("Access-Control-Request-Method", "GET")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp
+	}
+	resp := do(http.MethodGet, "https://console.example")
+	if resp.StatusCode != 200 || resp.Header.Get("Access-Control-Allow-Origin") != "https://console.example" || resp.Header.Get("Vary") != "Origin" {
+		t.Fatalf("allowed origin: %d %v", resp.StatusCode, resp.Header)
+	}
+	resp = do(http.MethodOptions, "https://console.example")
+	if resp.StatusCode != 204 || resp.Header.Get("Access-Control-Allow-Methods") != "GET" || resp.Header.Get("Access-Control-Allow-Headers") != "Accept" {
+		t.Fatalf("allowed preflight: %d %v", resp.StatusCode, resp.Header)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodOptions} {
+		resp = do(method, "https://evil.example")
+		if resp.Header.Get("Access-Control-Allow-Origin") != "" || resp.Header.Get("Access-Control-Allow-Methods") != "" {
+			t.Fatalf("%s from another origin got CORS headers: %v", method, resp.Header)
+		}
+	}
+	// With no origins configured (the default) nothing is allowed.
+	open := httptest.NewServer((&Server{Store: store.NewMemory(10)}).Handler())
+	defer open.Close()
+	req, _ := http.NewRequest(http.MethodGet, open.URL+"/api/v1/info", nil)
+	req.Header.Set("Origin", "https://console.example")
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r2.Body.Close()
+	if r2.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("default allows an origin: %v", r2.Header)
 	}
 }
 
