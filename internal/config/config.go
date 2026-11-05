@@ -314,9 +314,10 @@ func canonicalOrigin(o string) (string, error) {
 		case ip.Is6():
 			host = "[" + ip.String() + "]"
 		}
-	} else if strings.HasPrefix(u.Host, "[") || strings.Trim(host, "0123456789.x") == "" {
-		// A bracketed non-address, or a numeric host netip refuses (127.1,
-		// 010.0.0.1, 0x7f.0.0.1): browsers rewrite these, so refuse them.
+	} else if strings.HasPrefix(u.Host, "[") || endsInNumber(host) {
+		// A bracketed non-address, or a host the URL standard parses as IPv4
+		// but netip refuses (127.1, 010.0.0.1, 0x7f.0.0.1, 127.0.0.1.):
+		// browsers rewrite these, so refuse them.
 		return "", bad
 	}
 	if p := u.Port(); p != "" {
@@ -331,4 +332,16 @@ func canonicalOrigin(o string) (string, error) {
 		return "", bad
 	}
 	return u.Scheme + "://" + host, nil
+}
+
+// endsInNumber reports whether the URL standard treats host as an IPv4
+// address: its last label (ignoring one trailing dot) is decimal digits or
+// 0x followed by hex digits.
+func endsInNumber(host string) bool {
+	labels := strings.Split(strings.TrimSuffix(host, "."), ".")
+	last := labels[len(labels)-1]
+	if hex, ok := strings.CutPrefix(last, "0x"); ok {
+		return strings.Trim(hex, "0123456789abcdef") == ""
+	}
+	return last != "" && strings.Trim(last, "0123456789") == ""
 }
