@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -287,16 +289,46 @@ func (c *Config) validate() error {
 // optional port, nothing else. A wildcard is refused: an operator instance
 // serves data that only its console should read. It returns the origin as a
 // browser serializes it in the Origin header (lower-case, default port
-// dropped), so that the API's exact comparison matches.
+// dropped, IPv6 compressed, port without leading zeros), so that the API's
+// exact comparison matches. Forms a browser would rewrite in ways this
+// cannot reproduce exactly are refused rather than silently never matching:
+// a Unicode host (write it in punycode, xn--…), an IPv4-mapped IPv6 address
+// and an IPv4 address in a shorthand or zero-padded form.
 func canonicalOrigin(o string) (string, error) {
+	bad := fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
 	u, err := url.Parse(o)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || strings.Contains(u.Host, "*") ||
 		u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.HasSuffix(o, "?") || strings.HasSuffix(o, "#") {
-		return "", fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
+		return "", bad
 	}
-	host := strings.ToLower(u.Host)
-	if port := u.Port(); (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
-		host = strings.TrimSuffix(host, ":"+port)
+	host := strings.ToLower(u.Hostname())
+	for _, r := range host {
+		if r > 0x7f {
+			return "", fmt.Errorf("%q: write the host in punycode (xn--…), as browsers send it", o)
+		}
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		switch {
+		case ip.Zone() != "" || ip.Is4In6():
+			return "", bad
+		case ip.Is6():
+			host = "[" + ip.String() + "]"
+		}
+	} else if strings.HasPrefix(u.Host, "[") || strings.Trim(host, "0123456789.x") == "" {
+		// A bracketed non-address, or a numeric host netip refuses (127.1,
+		// 010.0.0.1, 0x7f.0.0.1): browsers rewrite these, so refuse them.
+		return "", bad
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return "", bad
+		}
+		if defaultPort := (u.Scheme == "https" && n == 443) || (u.Scheme == "http" && n == 80); !defaultPort {
+			host += ":" + strconv.Itoa(n)
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return "", bad
 	}
 	return u.Scheme + "://" + host, nil
 }
