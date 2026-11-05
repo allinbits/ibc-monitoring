@@ -17,7 +17,7 @@ GNO_ETH_IBC="${GNO_ETH_IBC:-$ROOT/../gno-eth-ibc}"
 DEPLOYMENT="$GNO_ETH_IBC/contracts/deployments/local.json"
 BIN="${BIN:-$ROOT/bin/ibcmon}"
 
-[[ -x "$BIN" ]] || { echo "build first: make build-go" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "build first: make build" >&2; exit 1; }
 [[ -f "$DEPLOYMENT" ]] || { echo "no deployment at $DEPLOYMENT: run make e2e-local in gno-eth-ibc" >&2; exit 1; }
 
 CFG="$(mktemp -t ibcmon-e2e.XXXXXX.yaml)"

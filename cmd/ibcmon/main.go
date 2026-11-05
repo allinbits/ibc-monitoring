@@ -269,7 +269,7 @@ func runServe(args []string, withMonitor, withWorker bool) error {
 	if info.AutoFlagRequested != info.AutoFlagEffective {
 		rt.log.Warn("autoflag requested but the auto-flag sink is not built yet: effective status unavailable, alarms only (docs/design.md §8.4, phase 3)", "requested", info.AutoFlagRequested)
 	}
-	srv := &api.Server{Store: rt.store, Info: info}
+	srv := &api.Server{Store: rt.store, Info: info, CORSOrigins: rt.cfg.Instance.CORSOrigins}
 	if withWorker && rt.ethc != nil {
 		w := &worker.Worker{Eth: rt.ethc, Log: rt.log}
 		srv.Jobs = w.Jobs

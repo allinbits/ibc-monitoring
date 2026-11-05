@@ -131,10 +131,10 @@ Packages (Go module `github.com/allinbits/ibc-monitoring`):
 | `internal/alert` | Alarm model and sinks: `log`, `webhook`; the `autoflag` sink (signs with the watch keys). |
 | `internal/worker` | The T5 jobs: `codehash`, `buildverify` (Docker), `layoutdiff` (Docker). |
 | `internal/store` | Results, alarms, job runs and their history. SQLite file (pure Go driver). |
-| `internal/api` | HTTP handlers, `/api/v1/*`, and the embedded console. |
+| `internal/api` | HTTP handlers, `/api/v1/*`, and the CORS allowlist for the console's origin. |
 | `internal/config` | Configuration file and environment. |
 | `cmd/ibcmon` | The CLI. |
-| `web/` | The console (TypeScript). |
+| `allinbits/ibc-monitoring-ui` | The console (TypeScript): a separate static app that reads the API. |
 
 ### 3.2 Data flow
 
@@ -215,7 +215,8 @@ Rules that follow:
 - **Guardian instance (recommended).** `docker compose up`: `ibcmon` with its SQLite volume, pointed at the
   guardian's own gno node, Ethereum execution and beacon nodes, and a second provider URL. Secrets (RPC URLs with
   tokens, webhook URLs, watch-key mnemonics if auto-flagging is enabled) come from the environment; the compose
-  file reads `.env`. The console is served by `ibcmon` itself on one port; put it behind the organisation's SSO or
+  file reads `.env`. The console (`ibc-monitoring-ui`) is a static app; serve it and the API from one origin through a reverse
+  proxy that sends `/api/` to `ibcmon`, and put that origin behind the organisation's SSO or
   a private network. Nothing in it needs to be public.
 - **Public read-only instance (optional).** The same binary with `public_instance: true`: the API hides monitor
   internals that would reveal the operator's node URLs, the auto-flag sink is refused by configuration, and the
@@ -1427,7 +1428,9 @@ one.
   `subject`, `status`, `started_at`, `finished_at`, `passed`): verdicts, logs and per-check texts never leave a
   public instance. The filter decodes with `UseNumber` so that no identifier passes through a float. It is a
   single function with a test that walks every endpoint, worker jobs included.
-- CORS: the API allows only the console's own origin by default.
+- CORS: by default the API sends no CORS headers, so only a console on its own origin can read it. A console on
+  another origin is listed explicitly in `instance.cors_origins` (bare origins; a wildcard is refused by the
+  configuration). The API is GET-only and takes no credentials, so the allowlist grants reads and nothing else.
 
 ### 10.3 Render output is untrusted
 
@@ -1463,7 +1466,7 @@ actor, and it is off by default and limited to what the ADR assigns to the watch
 | **go-ethereum v1.16** | `ethclient`, `gethclient.GetProof`, `accounts/abi`; ABIs embedded as JSON from the Foundry build of a named gno-eth-ibc revision (`abi/`), refreshed by `make abis` |
 | **SQLite via `modernc.org/sqlite`** | history and job logs need a file, not a server; pure Go, no cgo, one volume |
 | **stdlib `net/http` and `log/slog`** | enough; no framework to keep up with |
-| **Vite + React 18 + TypeScript** for the console | the simplest widely-known stack; static build embedded in the binary; React escapes output by default (§10.3) |
+| **Vite + React 18 + TypeScript** for the console | the simplest widely-known stack; a static build shipped from its own repository (`ibc-monitoring-ui`) and served beside the API; React escapes output by default (§10.3) |
 | **TanStack Query** | polling and cache of the API with no state framework |
 | **viem** | Ethereum wallet (EIP-1193), ABI encoding, `bigint` amounts natively |
 | **@adena-wallet/sdk** | Adena connection and `MsgCall` signing for gno.land |

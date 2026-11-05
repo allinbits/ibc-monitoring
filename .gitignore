@@ -9,10 +9,6 @@ deployments/*.local.*
 # build output
 /bin/
 /dist/
-/web/dist/
-/web/node_modules/
-/internal/api/webdist/*
-!/internal/api/webdist/.gitkeep
 
 # data
 /data/

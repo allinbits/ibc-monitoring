@@ -15,19 +15,21 @@ gno.land ↔ Ethereum route: the monitors (T4) and the watch tool (T5) of the
   code. The first production milestone is alarm-only (design §12, release
   gates).
 
-One Go binary, `ibcmon`, runs the monitor, the worker and the API, and serves
-the TypeScript console. Self-host it against your own nodes; a public instance
-is optional and labels itself non-authoritative.
+One Go binary, `ibcmon`, runs the monitor, the worker and the read-only API.
+The console that reads the API is a separate static app,
+[`allinbits/ibc-monitoring-ui`](https://github.com/allinbits/ibc-monitoring-ui).
+Self-host both against your own nodes; a public instance is optional and
+labels itself non-authoritative.
 
 ## Run it
 
-Requirements: Go 1.25, Node 24 with pnpm (console), Docker (worker jobs only).
+Requirements: Go 1.25, Docker (worker jobs only).
 
 ```sh
 cp .env.example .env            # endpoints and secrets, git-ignored
 cp ibcmon.example.yaml ibcmon.yaml
-make build                      # console + binary (bin/ibcmon)
-bin/ibcmon serve                # API and console on :8080
+make build                      # bin/ibcmon
+bin/ibcmon serve                # API on :8080, under /api/v1/
 ```
 
 Other commands:
@@ -35,10 +37,23 @@ Other commands:
 ```sh
 bin/ibcmon monitor              # monitor and API, no worker
 bin/ibcmon check client_expiry  # one check, once, as JSON
-make build-go                   # binary only (the console answers with a notice)
-make test lint                  # both halves
-cd web && pnpm dev              # console with hot reload, proxying /api to :8080
+make test lint
 ```
+
+### The console
+
+Build `ibc-monitoring-ui` and serve its static files. Two ways to reach the
+API:
+
+- **Same origin (recommended).** Serve the console and proxy `/api/` to
+  `ibcmon` from one reverse proxy, behind your access control. The console
+  then needs no configuration and the API no CORS.
+- **Another origin.** Build the console with `VITE_IBCMON_API` set to the
+  API's URL, and list the console's origin in `instance.cors_origins`. Only
+  the listed origins may read the API from a browser; there is no wildcard.
+
+In development, `pnpm dev` in `ibc-monitoring-ui` proxies `/api` to a running
+`ibcmon serve` (default `http://127.0.0.1:8080`).
 
 Configuration lives in `ibcmon.yaml` (non-secret) with `${VAR}` references
 expanded from the environment (`.env`): see `ibcmon.example.yaml` and
@@ -77,10 +92,9 @@ response (design §10.2).
 | `internal/monitor` | the T4 engine: collector with second-provider cross-checks, checks, scheduler |
 | `internal/alert` | alarm state machine and sinks (log, webhook) |
 | `internal/store` | snapshots, results, alarms (in-memory; SQLite is phase 2) |
-| `internal/api` | the read-only HTTP API and the embedded console |
+| `internal/api` | the read-only HTTP API |
 | `internal/worker` | T5 jobs: code hashes (built), build verification and layout diffs (stubs) |
 | `abi/` | contract ABIs from a Foundry build of gno-eth-ibc, with their revision |
-| `web/` | the console (Vite + React + TypeScript) |
 
 ## Security notes
 

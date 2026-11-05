@@ -1,15 +1,14 @@
-// Package api serves the read-only HTTP API the console reads and the
-// embedded console itself. No endpoint changes chain state; the only writes
+// Package api serves the read-only HTTP API the console reads. The console
+// itself is a separate static app (github.com/allinbits/ibc-monitoring-ui).
+// No endpoint changes chain state; the only writes
 // are the operator's "run again" of a worker job, which a public instance
 // refuses (docs/design.md §10.2).
 package api
 
 import (
-	"embed"
 	"encoding/json"
-	"io/fs"
 	"net/http"
-	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,9 +16,6 @@ import (
 	"github.com/allinbits/ibc-monitoring/internal/model"
 	"github.com/allinbits/ibc-monitoring/internal/store"
 )
-
-//go:embed all:webdist
-var webdist embed.FS
 
 // Info describes the instance to the console.
 type Info struct {
@@ -44,13 +40,16 @@ type Server struct {
 	Info  Info
 	// Jobs lists the worker's jobs (nil when the worker is off).
 	Jobs func() any
-	mux  *http.ServeMux
+	// CORSOrigins lists the console origins allowed to read the API from
+	// another origin (instance.cors_origins). Empty: same origin only.
+	CORSOrigins []string
+	handler     http.Handler
 }
 
-// Handler returns the HTTP handler: /api/v1/* and the console.
+// Handler returns the HTTP handler: /api/v1/* and a short notice at the root.
 func (s *Server) Handler() http.Handler {
-	if s.mux != nil {
-		return s.mux
+	if s.handler != nil {
+		return s.handler
 	}
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/v1/health", s.health)
@@ -64,9 +63,44 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/alarms", s.alarms)
 	m.HandleFunc("GET /api/v1/alarms/events", s.alarmEvents)
 	m.HandleFunc("GET /api/v1/worker/jobs", s.jobs)
-	m.Handle("/", s.console())
-	s.mux = m
-	return m
+	m.HandleFunc("/", notice)
+	s.handler = s.cors(m)
+	return s.handler
+}
+
+// cors lets the listed console origins read the API. Every endpoint is a GET
+// with no credentials, so a preflight only ever needs the method and the
+// Accept header; other origins get no CORS headers and the browser refuses
+// them (docs/design.md §10.2).
+func (s *Server) cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		allowed := origin != "" && slices.Contains(s.CORSOrigins, origin)
+		w.Header().Add("Vary", "Origin")
+		if allowed {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Methods", "GET")
+				w.Header().Set("Access-Control-Allow-Headers", "Accept")
+				w.Header().Set("Access-Control-Max-Age", "600")
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// notice answers every path outside /api/v1/: the binary serves no console.
+func notice(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ibcmon: the API is under /api/v1/; the console is the separate ibc-monitoring-ui app\n"))
 }
 
 // writeJSON encodes v; on a public instance every response goes through the
@@ -305,37 +339,4 @@ func (s *Server) jobs(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	s.writeJSON(w, s.Jobs())
-}
-
-// console serves the embedded build with an SPA fallback to index.html. With
-// no build present (a backend-only checkout) it answers a short notice.
-func (s *Server) console() http.Handler {
-	sub, err := fs.Sub(webdist, "webdist")
-	if err != nil {
-		panic(err)
-	}
-	fileServer := http.FileServer(http.FS(sub))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-		if p == "" {
-			p = "index.html"
-		}
-		if f, err := sub.Open(p); err == nil {
-			_ = f.Close()
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		if f, err := sub.Open("index.html"); err == nil {
-			_ = f.Close()
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ibcmon: the console is not built into this binary (run `make build-web`); the API is under /api/v1/\n"))
-	})
 }

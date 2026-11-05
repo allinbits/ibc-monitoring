@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -27,9 +28,14 @@ type Config struct {
 
 type Instance struct {
 	// Public enables the non-authoritative, read-only public mode (§3.4).
-	Public  bool   `yaml:"public"`
-	Listen  string `yaml:"listen"`
-	DataDir string `yaml:"data_dir"`
+	Public bool   `yaml:"public"`
+	Listen string `yaml:"listen"`
+	// CORSOrigins lists the origins of the console (ibc-monitoring-ui) that
+	// may read the API from another origin, e.g. "https://monitor.example".
+	// Empty (the default): same origin only, the console being served
+	// beside the API by a reverse proxy (docs/design.md §10.2).
+	CORSOrigins []string `yaml:"cors_origins"`
+	DataDir     string   `yaml:"data_dir"`
 	// History is how many results per check the store keeps.
 	History int `yaml:"history"`
 	// RequireCrossCheck (default true) refuses a chain without a second
@@ -245,6 +251,11 @@ func (c *Config) defaults() {
 }
 
 func (c *Config) validate() error {
+	for _, o := range c.Instance.CORSOrigins {
+		if err := validOrigin(o); err != nil {
+			return fmt.Errorf("config: instance.cors_origins: %w", err)
+		}
+	}
 	if c.AutoFlag.Enabled && c.Instance.Public {
 		return errors.New("config: autoflag cannot be enabled on a public instance")
 	}
@@ -266,6 +277,18 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("config: unknown sink type %q", s.Type)
 		}
+	}
+	return nil
+}
+
+// validOrigin accepts a bare http(s) origin: scheme and host, an optional
+// port, nothing else. A wildcard is refused: an operator instance serves
+// data that only its console should read.
+func validOrigin(o string) error {
+	u, err := url.Parse(o)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.Contains(u.Host, "*") ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(o, "/") {
+		return fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
 	}
 	return nil
 }

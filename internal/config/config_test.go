@@ -66,4 +66,13 @@ alerts:
 	if c, err := Parse([]byte("instance:\n  require_cross_check: false\ngno:\n  rpc_url: http://a\n"), lookup); err != nil || c.Instance.CrossCheckRequired() {
 		t.Fatalf("explicit opt-out: %v", err)
 	}
+	// instance.cors_origins takes bare origins only, never a wildcard.
+	if c, err := Parse([]byte("instance:\n  cors_origins: [\"https://console.example\", \"http://127.0.0.1:5173\"]\n"), lookup); err != nil || len(c.Instance.CORSOrigins) != 2 {
+		t.Fatalf("valid origins: %v", err)
+	}
+	for _, bad := range []string{"*", "https://*.example", "https://console.example/", "https://console.example/app", "console.example", "ftp://console.example", "https://u@console.example"} {
+		if _, err := Parse([]byte("instance:\n  cors_origins: [\""+bad+"\"]\n"), lookup); err == nil || !strings.Contains(err.Error(), "cors_origins") {
+			t.Fatalf("origin %q accepted: %v", bad, err)
+		}
+	}
 }
