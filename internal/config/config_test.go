@@ -75,7 +75,7 @@ alerts:
 	if err != nil || strings.Join(c.Instance.CORSOrigins, " ") != "https://console.example http://a.example https://a.example:8443 http://[::1]:5173 http://127.0.0.1:5173 https://xn--bcher-kva.example" {
 		t.Fatalf("canonical origins: %v %v", c.Instance.CORSOrigins, err)
 	}
-	for _, bad := range []string{"*", "https://*.example", "https://console.example/", "https://console.example/app", "console.example", "ftp://console.example", "https://u@console.example", "https://console.example?", "https://", "https://bücher.example", "http://[::ffff:127.0.0.1]", "http://127.1", "http://010.0.0.1", "http://0x7f.0.0.1", "http://127.0.0.0x1", "http://127.0.0.1.", "http://a.example.0x", "http://a.1", "http://[fe80::1%25en0]", "https://console.example:0", "https://console.example:70000", "https://console.example:"} {
+	for _, bad := range []string{"*", "https://*.example", "https://console.example/", "https://console.example/app", "console.example", "ftp://console.example", "https://u@console.example", "https://console.example?", "https://", "https://bücher.example", "https://İ.example", "https://\u212a.example", "http://[::ffff:127.0.0.1]", "http://127.1", "http://010.0.0.1", "http://0x7f.0.0.1", "http://127.0.0.0x1", "http://127.0.0.1.", "http://a.example.0x", "http://a.1", "http://[fe80::1%25en0]", "https://console.example:0", "https://console.example:70000", "https://console.example:"} {
 		if _, err := Parse([]byte("instance:\n  cors_origins: [\""+bad+"\"]\n"), lookup); err == nil || !strings.Contains(err.Error(), "cors_origins") {
 			t.Fatalf("origin %q accepted: %v", bad, err)
 		}

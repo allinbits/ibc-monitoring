@@ -301,12 +301,14 @@ func canonicalOrigin(o string) (string, error) {
 		u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.HasSuffix(o, "?") || strings.HasSuffix(o, "#") {
 		return "", bad
 	}
-	host := strings.ToLower(u.Hostname())
-	for _, r := range host {
+	// Checked before lower-casing: Unicode case folding can turn a
+	// non-ASCII host into a different ASCII one (U+0130 İ → i).
+	for _, r := range u.Hostname() {
 		if r > 0x7f {
 			return "", fmt.Errorf("%q: write the host in punycode (xn--…), as browsers send it", o)
 		}
 	}
+	host := strings.ToLower(u.Hostname())
 	if ip, err := netip.ParseAddr(host); err == nil {
 		switch {
 		case ip.Zone() != "" || ip.Is4In6():
