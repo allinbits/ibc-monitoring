@@ -251,10 +251,12 @@ func (c *Config) defaults() {
 }
 
 func (c *Config) validate() error {
-	for _, o := range c.Instance.CORSOrigins {
-		if err := validOrigin(o); err != nil {
+	for i, o := range c.Instance.CORSOrigins {
+		canon, err := canonicalOrigin(o)
+		if err != nil {
 			return fmt.Errorf("config: instance.cors_origins: %w", err)
 		}
+		c.Instance.CORSOrigins[i] = canon
 	}
 	if c.AutoFlag.Enabled && c.Instance.Public {
 		return errors.New("config: autoflag cannot be enabled on a public instance")
@@ -281,14 +283,20 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// validOrigin accepts a bare http(s) origin: scheme and host, an optional
-// port, nothing else. A wildcard is refused: an operator instance serves
-// data that only its console should read.
-func validOrigin(o string) error {
+// canonicalOrigin accepts a bare http(s) origin: scheme and host, an
+// optional port, nothing else. A wildcard is refused: an operator instance
+// serves data that only its console should read. It returns the origin as a
+// browser serializes it in the Origin header (lower-case, default port
+// dropped), so that the API's exact comparison matches.
+func canonicalOrigin(o string) (string, error) {
 	u, err := url.Parse(o)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.Contains(u.Host, "*") ||
-		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(o, "/") {
-		return fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || strings.Contains(u.Host, "*") ||
+		u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.HasSuffix(o, "?") || strings.HasSuffix(o, "#") {
+		return "", fmt.Errorf("%q is not an origin (scheme://host[:port])", o)
 	}
-	return nil
+	host := strings.ToLower(u.Host)
+	if port := u.Port(); (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		host = strings.TrimSuffix(host, ":"+port)
+	}
+	return u.Scheme + "://" + host, nil
 }

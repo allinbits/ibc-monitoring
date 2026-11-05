@@ -111,7 +111,8 @@ rest. The console reads the seats (`Seat`, `guardians()`) to show which actions 
 
 One Go binary, `ibcmon`, with subcommands:
 
-- `ibcmon serve` — the read-only data layer and the HTTP API, serving the built console. Runs the monitor and
+- `ibcmon serve` — the read-only data layer and the HTTP API (the console is the separate `ibc-monitoring-ui`
+  app). Runs the monitor and
   the worker as well unless `--no-monitor` / `--no-worker`.
 - `ibcmon monitor` — T4 only (headless; alerts to sinks; API for its results).
 - `ibcmon worker` — T5 only.
@@ -1461,7 +1462,7 @@ actor, and it is off by default and limited to what the ADR assigns to the watch
 
 | Choice | Why |
 |---|---|
-| **Go 1.25** for the backend | the relayer, gno and tm2 are Go; go-ethereum gives `eth_call`, `eth_getProof`, ABI, RLP and keccak; one static binary ships the daemon, the worker and the console |
+| **Go 1.25** for the backend | the relayer, gno and tm2 are Go; go-ethereum gives `eth_call`, `eth_getProof`, ABI, RLP and keccak; one static binary ships the daemon, the worker and the API (the console ships separately) |
 | **No dependency on the gno module** | the monitor reads through JSON-RPC (`abci_query`) with a 300-line client; importing `gnolang/gno` would pin this repository to a fork and pull in the VM. The relayer's gno client (gno-eth-ibc `relayer/gno`) is not imported either: its module path does not resolve and it depends on the gno module |
 | **go-ethereum v1.16** | `ethclient`, `gethclient.GetProof`, `accounts/abi`; ABIs embedded as JSON from the Foundry build of a named gno-eth-ibc revision (`abi/`), refreshed by `make abis` |
 | **SQLite via `modernc.org/sqlite`** | history and job logs need a file, not a server; pure Go, no cgo, one volume |

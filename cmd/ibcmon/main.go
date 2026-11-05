@@ -64,7 +64,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: ibcmon <command> [flags]
 
-  serve    run the monitor, the worker and the API with the console
+  serve    run the monitor, the worker and the API
   monitor  run the monitor and the API only (no worker)
   check    run one check once and print its result as JSON
   version  print the version

@@ -70,7 +70,12 @@ alerts:
 	if c, err := Parse([]byte("instance:\n  cors_origins: [\"https://console.example\", \"http://127.0.0.1:5173\"]\n"), lookup); err != nil || len(c.Instance.CORSOrigins) != 2 {
 		t.Fatalf("valid origins: %v", err)
 	}
-	for _, bad := range []string{"*", "https://*.example", "https://console.example/", "https://console.example/app", "console.example", "ftp://console.example", "https://u@console.example"} {
+	// Values are stored as a browser sends them in the Origin header.
+	c, err = Parse([]byte("instance:\n  cors_origins: [\"HTTPS://Console.Example:443\", \"http://a.example:80\", \"https://a.example:8443\"]\n"), lookup)
+	if err != nil || strings.Join(c.Instance.CORSOrigins, " ") != "https://console.example http://a.example https://a.example:8443" {
+		t.Fatalf("canonical origins: %v %v", c.Instance.CORSOrigins, err)
+	}
+	for _, bad := range []string{"*", "https://*.example", "https://console.example/", "https://console.example/app", "console.example", "ftp://console.example", "https://u@console.example", "https://console.example?", "https://"} {
 		if _, err := Parse([]byte("instance:\n  cors_origins: [\""+bad+"\"]\n"), lookup); err == nil || !strings.Contains(err.Error(), "cors_origins") {
 			t.Fatalf("origin %q accepted: %v", bad, err)
 		}
